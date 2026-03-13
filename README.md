@@ -88,7 +88,7 @@ tests:
 |-------|-----------|
 | Browser automation | Playwright (Chromium) |
 | Page representation | Accessibility tree (primary) + screenshots (fallback) |
-| AI | Claude API (Anthropic) |
+| AI | OpenRouter (any OpenAI-compatible provider) |
 | Test definitions | YAML |
 | Language | TypeScript (Node.js, ESM) |
 
@@ -105,7 +105,7 @@ flowchart TD
 
             subgraph pilot[The Pilot — per test case]
                 state[Page State Capture<br/>a11y snapshot, screenshot, logs]
-                llm[LLM Client<br/>Claude API]
+                llm[LLM Client<br/>OpenRouter / OpenAI-compatible]
                 executor[Action Executor<br/>Playwright]
             end
         end
@@ -125,7 +125,7 @@ flowchart TD
     orchestrator --> reporter
 ```
 
-The Pilot loop per step: capture page state (a11y tree + optional screenshot) → send to Claude with the plain-English step → receive a structured action (`{ action: "click", ref: "e42" }`) → execute via Playwright → capture result.
+The Pilot loop per step: capture page state (a11y tree + optional screenshot) → send to the LLM with the plain-English step → receive a structured action (`{ action: "click", ref: "e42" }`) → execute via Playwright → capture result.
 
 ## Documentation
 
@@ -139,7 +139,7 @@ The Pilot loop per step: capture page state (a11y tree + optional screenshot) �
   run: greenlight run --reporter json --output results.json
   env:
     GREENLIGHT_BASE_URL: ${{ env.STAGING_URL }}
-    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
 Exit code 0 on all-pass, non-zero on any failure.

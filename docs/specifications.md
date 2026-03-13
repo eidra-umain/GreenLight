@@ -304,8 +304,8 @@ The following are explicitly **not** part of the initial release. They are noted
 
 ### Security
 - Credentials and secrets are never written to reports, logs, or screenshots.
-- The tool runs in the user's own environment — no data leaves the network beyond Claude API calls.
-- The Claude API receives accessibility tree snapshots and screenshots only; it does not receive raw application data, database contents, or full DOM/HTML.
+- The tool runs in the user's own environment — no data leaves the network beyond LLM API calls.
+- The LLM API receives accessibility tree snapshots and screenshots only; it does not receive raw application data, database contents, or full DOM/HTML.
 
 ### Usability
 - A new user should be able to write and run their first test within 15 minutes.
@@ -347,7 +347,7 @@ flowchart TD
     end
 
     subgraph resolve[LLM Resolution]
-        llm[Claude API]
+        llm[LLM via OpenRouter]
         action[Action JSON<br/>e.g. click ref e42]
     end
 
@@ -388,14 +388,20 @@ GreenLight's architecture is informed by Microsoft's Playwright MCP server patte
 
 **Future MCP consideration:** If GreenLight eventually exposes its browser automation capabilities to external AI agents or IDE integrations (e.g., a GreenLight MCP server that lets Claude Code run tests), MCP becomes the right protocol for that integration surface. This is out of scope for MVP.
 
-### LLM: Claude API (Anthropic)
+### LLM: Provider-Agnostic via OpenRouter
 
-The Pilot uses the Claude API for step interpretation and element resolution:
+The Pilot communicates with the LLM through the **OpenAI-compatible chat completions API**, using **OpenRouter** as the default gateway. This allows any model to be used without code changes.
+
 - **Text input** — the plain-English step + accessibility tree snapshot.
-- **Vision input** — screenshots when the a11y tree fallback is triggered.
+- **Vision input** — screenshots when the a11y tree fallback is triggered (as base64 image content blocks).
 - **Structured output** — the LLM returns JSON actions (`{ action, ref, params }`) parsed by the Pilot.
 
-Model selection is configurable per suite. Default: `claude-sonnet-4-6` for speed/cost balance. `claude-opus-4-6` available for complex UIs requiring deeper reasoning.
+**Configuration:**
+- `model` — configurable per suite in YAML or via `--model` CLI flag. Default: `anthropic/claude-sonnet-4` via OpenRouter.
+- `OPENROUTER_API_KEY` / `LLM_API_KEY` — API key from environment variable.
+- `--llm-base-url` — override the API endpoint to use any OpenAI-compatible provider (direct OpenAI, Azure, local Ollama, etc.).
+
+**Why OpenRouter?** Single API key for access to Claude, GPT-4o, Gemini, Llama, and others. Teams can experiment with different models per suite without managing multiple provider credentials. For production, the base URL can be pointed directly at any provider's API.
 
 ---
 
@@ -416,7 +422,7 @@ flowchart TD
 
             subgraph pilot[The Pilot — per test case]
                 state[Page State Capture<br/>a11y snapshot, screenshot, logs]
-                llm[LLM Client<br/>Claude API]
+                llm[LLM Client<br/>OpenRouter / OpenAI-compatible]
                 executor[Action Executor<br/>Playwright]
             end
         end
@@ -453,7 +459,7 @@ flowchart TD
    - Accessibility tree snapshot (YAML with element refs).
    - Viewport screenshot (PNG).
    - Browser console logs and network events.
-6. **LLM Client** — Sends prompts to the Claude API. Manages the system prompt (Pilot persona, available actions), handles structured output parsing, and logs reasoning traces.
+6. **LLM Client** — Sends prompts to an OpenAI-compatible chat completions endpoint (OpenRouter by default). Manages the system prompt (Pilot persona, available actions), handles structured output parsing, and logs reasoning traces. Provider and model are configurable per suite.
 7. **Action Executor** — Translates structured actions into Playwright calls. Resolves element refs from the a11y snapshot to Playwright locators. Handles auto-waiting, retries, and timeout enforcement.
 8. **Reporter** — Collects step results, screenshots, reasoning traces, and timing data. Generates output in CLI, JSON, or HTML format.
 

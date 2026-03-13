@@ -3,8 +3,22 @@
 import { Command } from "commander"
 import { DEFAULTS, type RunConfig } from "../types.js"
 import { loadSuite } from "../parser/loader.js"
+import {
+	launchBrowser,
+	createContext,
+	createPage,
+	closeBrowser,
+	toBrowserOptions,
+} from "../browser/browser.js"
+import {
+	capturePageState,
+	attachConsoleCollector,
+	resetRefCounter,
+	formatA11yTree,
+} from "../pilot/state.js"
 import { resolve } from "node:path"
 import { glob } from "node:fs"
+import { writeFile } from "node:fs/promises"
 
 const program = new Command()
 
@@ -69,7 +83,7 @@ program
 				process.exit(1)
 			}
 
-			// Load and display each suite
+			// Load and run each suite
 			for (const file of resolvedFiles) {
 				try {
 					const suite = await loadSuite(file)
@@ -81,21 +95,49 @@ program
 
 					console.log(`\nSuite: ${suite.suite}`)
 					console.log(`URL:   ${suite.base_url}`)
-					if (suite.viewport) {
-						console.log(
-							`Viewport: ${String(suite.viewport.width)}x${String(suite.viewport.height)}`,
-						)
-					}
 
-					for (const test of suite.tests) {
-						// Apply test name filter
-						if (config.testFilter && test.name !== config.testFilter) {
-							continue
+					// Launch browser and navigate
+					const browserOpts = toBrowserOptions(config)
+					const browser = await launchBrowser(browserOpts)
+
+					try {
+						const context = await createContext(browser, browserOpts)
+						const page = await createPage(context)
+						const { drain } = attachConsoleCollector(page)
+
+						await page.goto(suite.base_url)
+						resetRefCounter()
+
+						const state = await capturePageState(page, drain)
+
+						// Print a11y tree
+						console.log(`\nAccessibility tree (${suite.base_url}):\n`)
+						console.log(formatA11yTree(state.a11yTree))
+
+						// Save screenshot
+						const screenshotPath = resolve("screenshot.png")
+						await writeFile(
+							screenshotPath,
+							Buffer.from(state.screenshot, "base64"),
+						)
+						console.log(`\nScreenshot saved: ${screenshotPath}`)
+						console.log(`Page title: ${state.title}`)
+						console.log(`Console logs: ${String(state.consoleLogs.length)} entries`)
+
+						// Print test cases
+						for (const test of suite.tests) {
+							if (config.testFilter && test.name !== config.testFilter) {
+								continue
+							}
+							console.log(`\n  Test: ${test.name}`)
+							for (const step of test.steps) {
+								console.log(`    - ${step}`)
+							}
 						}
-						console.log(`\n  Test: ${test.name}`)
-						for (const step of test.steps) {
-							console.log(`    - ${step}`)
-						}
+
+						await context.close()
+					} finally {
+						await closeBrowser(browser)
 					}
 				} catch (err) {
 					console.error(`\nFailed to load suite: ${file}`)

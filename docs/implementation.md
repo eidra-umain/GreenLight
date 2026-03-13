@@ -145,29 +145,41 @@ npx greenlight run examples/demo.yaml --headed
 
 ## Step 4 — LLM client and structured action parsing
 
-**Goal:** Given a step and page state, the LLM returns a structured action. Verifiable by running a single hardcoded step against a live page.
+**Goal:** Given a step and page state, the LLM returns a structured action. Verifiable by running a single hardcoded step against a live page. The LLM layer is provider-agnostic, using the OpenAI-compatible chat completions API via OpenRouter so any model can be swapped in.
 
 **Modules introduced:**
-- `src/pilot/llm.ts` — Claude API client: prompt construction, API call, response parsing
+- `src/pilot/llm.ts` — provider-agnostic LLM client: prompt construction, API call, response parsing
 
 **What to implement:**
 1. `llm.ts`:
-   - `createLLMClient(config)` — initializes the Anthropic SDK client.
-   - `resolveStep(step, pageState, config): Action` — constructs a prompt containing:
-     - System prompt: the Pilot's persona, the list of available actions (click, type, select, scroll, navigate, wait, assert, etc.), and the expected JSON response format.
-     - User message: the plain-English step + the a11y snapshot (as text). Screenshot attached as an image only if configured or a11y-only resolution fails.
+   - `createLLMClient(config): LLMClient` — returns a client that talks to an OpenAI-compatible endpoint (default: OpenRouter). No vendor SDK needed — use plain `fetch` against the `/chat/completions` endpoint. Configuration:
+     - `apiKey` — from `OPENROUTER_API_KEY` env var (or `LLM_API_KEY` as a generic fallback).
+     - `baseUrl` — defaults to `https://openrouter.ai/api/v1` but overridable for any OpenAI-compatible provider (e.g., direct OpenAI, local Ollama, etc.).
+     - `model` — configurable per suite in YAML (`model` field) or via CLI `--model` flag. Default: `anthropic/claude-sonnet-4` via OpenRouter.
+   - `resolveStep(step, pageState): Action` — constructs a chat completion request:
+     - **System message:** the Pilot's persona, the list of available actions (click, type, select, scroll, navigate, wait, assert, etc.), and the expected JSON response format.
+     - **User message:** the plain-English step + the a11y snapshot (as text). Screenshot attached as an image content block (base64 data URL) only when a11y-only resolution fails.
    - Parses the LLM response into a typed `Action` object: `{ action: string, ref?: string, value?: string, assertion?: object }`.
    - Handles retries on malformed responses (re-prompt with clarification).
 2. Define the `Action` type and the system prompt template in clear, versionable constants.
-3. Temporary test harness in the CLI: loads suite → opens browser → navigates → captures state → sends the first step of the first test to the LLM → prints the returned action → exits.
+3. Add `model` field to `SuiteSchema` (optional, overridable) and `--model` flag to CLI. Add `model`, `llmBaseUrl` to `RunConfig`.
+4. Temporary test harness in the CLI: loads suite → opens browser → navigates → captures state → sends the first step of the first test to the LLM → prints the returned action → exits.
 
 **Verify:**
 ```bash
-ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml
 # → navigates to base_url
 # → captures a11y snapshot
-# → sends first step to Claude
+# → sends first step to configured model via OpenRouter
 # → prints the structured action returned (e.g. { action: "click", ref: "e5" })
+
+# Override model from CLI:
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --model openai/gpt-4o
+
+# Use a different OpenAI-compatible provider:
+LLM_API_KEY=sk-... npx greenlight run examples/demo.yaml \
+  --llm-base-url http://localhost:11434/v1 \
+  --model llama3
 ```
 
 ---
@@ -195,7 +207,7 @@ ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml
 
 **Verify:**
 ```bash
-ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
 # → opens browser, navigates
 # → executes the first step of the first test (e.g. clicks a button)
 # → prints the action taken and the result
@@ -228,7 +240,7 @@ ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
 
 **Verify:**
 ```bash
-ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
 # → runs all steps of the first test case
 # → prints per-step pass/fail with action details
 # → stops on first failure with error explanation
@@ -257,7 +269,7 @@ ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
 
 **Verify:**
 ```bash
-ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml
 # → runs all test cases in the suite sequentially
 # → prints per-test and per-step results
 # → exits 0 if all pass, 1 if any fail
@@ -287,7 +299,7 @@ npx greenlight run examples/demo.yaml --test "User can search"
 
 **Verify:**
 ```bash
-ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml
 # → clean, colored output:
 #   Suite: Demo Flow
 #   ✓ User can search (4.2s)
@@ -315,7 +327,7 @@ ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml
 
 **Verify:**
 ```bash
-ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml --reporter json --output results.json
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --reporter json --output results.json
 cat results.json | jq '.results[0].status'
 # → "passed"
 ```
@@ -338,7 +350,7 @@ cat results.json | jq '.results[0].status'
 
 **Verify:**
 ```bash
-ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml --parallel 4 --headed
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --parallel 4 --headed
 # → 4 browser tabs open simultaneously, each running a test case
 # → results printed in definition order after all complete
 # → total wall time is significantly less than sequential
@@ -366,7 +378,7 @@ ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml --parallel 4 --he
 
 **Verify:**
 ```bash
-ANTHROPIC_API_KEY=sk-... npx greenlight run examples/demo.yaml --reporter html --output report.html
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --reporter html --output report.html
 open report.html
 # → visual report with screenshots, pass/fail status, expandable step details
 ```
@@ -392,7 +404,7 @@ open report.html
 **Verify:**
 ```bash
 # Create a test against a slow-loading page
-ANTHROPIC_API_KEY=sk-... npx greenlight run examples/retry-demo.yaml --headed --timeout 15000
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/retry-demo.yaml --headed --timeout 15000
 # → step that initially can't find element retries after a wait and succeeds
 # → CLI output shows "(retry 1/2)"
 ```
@@ -417,7 +429,7 @@ ANTHROPIC_API_KEY=sk-... npx greenlight run examples/retry-demo.yaml --headed --
 
 **Verify:**
 ```bash
-ADMIN_PASSWORD=s3cret ANTHROPIC_API_KEY=sk-... npx greenlight run examples/auth-demo.yaml
+ADMIN_PASSWORD=s3cret OPENROUTER_API_KEY=sk-... npx greenlight run examples/auth-demo.yaml
 # → step uses env var password
 # → CLI output shows 'enter "[REDACTED]" into "Password"'
 # → JSON report does not contain the actual password
