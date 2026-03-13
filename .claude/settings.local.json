@@ -9,7 +9,8 @@
       "Bash(npx prettier:*)",
       "Bash(npm test:*)",
       "Bash(npx playwright:*)",
-      "Bash(npx vitest:*)"
+      "Bash(npx vitest:*)",
+      "Bash(npm link:*)"
     ]
   }
 }

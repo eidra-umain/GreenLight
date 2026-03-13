@@ -5,9 +5,17 @@
   "license": "ISC",
   "author": "umain.com",
   "type": "module",
+  "main": "dist/cli/index.js",
+  "exports": {
+    ".": "./dist/cli/index.js",
+    "./*": "./dist/*"
+  },
   "bin": {
     "greenlight": "dist/cli/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",

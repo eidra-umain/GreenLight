@@ -21,7 +21,7 @@ export const TestCaseSchema = z.object({
  */
 export const SuiteSchema = z.object({
 	suite: z.string().min(1),
-	base_url: z.url(),
+	base_url: z.url().optional(),
 	viewport: ViewportSchema.optional(),
 	model: z.string().min(1).optional(),
 	variables: z.record(z.string(), z.string()).optional(),

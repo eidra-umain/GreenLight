@@ -31,26 +31,112 @@ The Pilot reads each step, observes the page through accessibility tree snapshot
 
 ## Quick start
 
+1. Add GreenLight to your project:
+
 ```bash
-npm install
-npm run build
-npx greenlight run tests/login.yaml
+npm install greenlight
 ```
+
+2. Create a `greenlight.yaml` in your project root:
+
+```yaml
+suites:
+  - tests/e2e/login.yaml
+  - tests/e2e/checkout.yaml
+
+deployments:
+  staging:
+    base_url: https://staging.myapp.com
+```
+
+3. Run:
+
+```bash
+greenlight run
+```
+
+## Project configuration
+
+GreenLight looks for a `greenlight.yaml` in the working directory. This file defines which suites to run and supports multiple deployment targets.
+
+### Single deployment
+
+When there is only one deployment, it is used automatically:
+
+```yaml
+suites:
+  - tests/e2e/*.yaml
+
+deployments:
+  staging:
+    base_url: https://staging.myapp.com
+```
+
+### Multiple deployments
+
+```yaml
+suites:
+  - tests/e2e/*.yaml
+
+model: anthropic/claude-sonnet-4
+timeout: 15000
+
+deployments:
+  dev:
+    base_url: https://dev.myapp.com
+  staging:
+    base_url: https://staging.myapp.com
+  prod:
+    base_url: https://myapp.com
+    timeout: 30000
+
+default_deployment: staging
+```
+
+Shared settings go at the top level. Deployment-specific settings override them.
+
+```bash
+greenlight run                  # uses default_deployment (staging)
+greenlight run -d prod          # selects the prod deployment
+greenlight run -d dev           # selects the dev deployment
+```
+
+If there are multiple deployments and no `default_deployment` is set, the `--deployment` flag is required.
+
+### All config fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `suites` | string[] | Paths or globs to suite YAML files (required) |
+| `deployments` | map | Named deployment targets |
+| `default_deployment` | string | Which deployment to use by default |
+| `base_url` | string | Base URL for the site under test |
+| `model` | string | LLM model identifier |
+| `llm_base_url` | string | Base URL for the OpenAI-compatible API |
+| `timeout` | number | Per-step timeout in milliseconds |
+| `headed` | boolean | Run browser in visible mode |
+| `parallel` | number | Number of concurrent test cases |
+| `reporter` | string | Output format: `cli`, `json`, or `html` |
+| `viewport` | object | `{ width, height }` for the browser viewport |
+
+All fields except `suites` can appear at the top level or inside a deployment. Priority: **CLI flags > deployment > top-level config > built-in defaults**.
 
 ## CLI
 
 ```bash
-greenlight run [suites...]            # run suite YAML files
-greenlight run --test "Login"         # filter by test name
-greenlight run --base-url <url>       # override base URL
-greenlight run --headed               # visible browser
-greenlight run --parallel 4           # concurrent test cases
-greenlight run --reporter json        # json output (also: cli, html)
-greenlight run --output results.json  # write to file
-greenlight run --timeout 15000        # per-step timeout (ms)
-greenlight run --model openai/gpt-4o  # override LLM model
-greenlight run --llm-base-url <url>   # use a different OpenAI-compatible API
-greenlight run --debug                # verbose output (a11y tree, screenshots, logs)
+greenlight run [suites...]              # run suite YAML files (overrides greenlight.yaml)
+greenlight run                          # run suites from greenlight.yaml
+greenlight run -d, --deployment <name>  # select a named deployment
+greenlight run -t, --test <name>        # filter by test name
+greenlight run --base-url <url>         # override base URL
+greenlight run --headed                 # visible browser
+greenlight run -p, --parallel 4         # concurrent test cases
+greenlight run -r, --reporter json      # json output (also: cli, html)
+greenlight run -o, --output results.json  # write to file
+greenlight run --timeout 15000          # per-step timeout (ms)
+greenlight run --model openai/gpt-4o    # override LLM model
+greenlight run --llm-base-url <url>     # use a different OpenAI-compatible API
+greenlight run --debug                  # verbose output (a11y tree, actions, timings)
 ```
 
 ## GreenLight philosopy compared to Gherkin/Cucumber
@@ -116,24 +202,15 @@ OPENROUTER_API_KEY=sk-or-v1-...
 
 ### Model selection
 
-The LLM model is configurable at three levels (highest priority first):
+The LLM model is configurable at multiple levels (highest priority first):
 
 | Level | How | Example |
 |-------|-----|---------|
 | CLI flag | `--model <id>` | `--model openai/gpt-4o` |
-| Suite YAML | `model` field | `model: "anthropic/claude-sonnet-4"` |
+| Suite YAML | `model` field | `model: "google/gemini-2.5-flash"` |
+| Deployment | `model` in deployment | see greenlight.yaml above |
+| Project config | `model` at top level | see greenlight.yaml above |
 | Default | â€” | `anthropic/claude-sonnet-4` via OpenRouter |
-
-```yaml
-suite: "Login Flow"
-base_url: "https://staging.example.com"
-model: "google/gemini-2.5-flash"  # optional per-suite override
-
-tests:
-  - name: "User can log in"
-    steps:
-      - click "Sign In"
-```
 
 ### Custom LLM endpoint
 
@@ -201,9 +278,8 @@ The Pilot loop per step: capture page state (a11y tree + optional screenshot) â†
 
 ```yaml
 - name: Run E2E tests
-  run: greenlight run --reporter json --output results.json
+  run: greenlight run -d staging --reporter json --output results.json
   env:
-    GREENLIGHT_BASE_URL: ${{ env.STAGING_URL }}
     OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
