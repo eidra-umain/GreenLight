@@ -8,7 +8,8 @@
       "Bash(npx eslint:*)",
       "Bash(npx prettier:*)",
       "Bash(npm test:*)",
-      "Bash(npx playwright:*)"
+      "Bash(npx playwright:*)",
+      "Bash(npx vitest:*)"
     ]
   }
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import "dotenv/config"
 import { Command } from "commander"
 import { DEFAULTS, type RunConfig } from "../types.js"
 import { loadSuite } from "../parser/loader.js"
@@ -16,6 +17,8 @@ import {
 	resetRefCounter,
 	formatA11yTree,
 } from "../pilot/state.js"
+import { resolveLLMConfig, createLLMClient } from "../pilot/llm.js"
+import { executeAction } from "../pilot/executor.js"
 import { resolve } from "node:path"
 import { glob } from "node:fs"
 import { writeFile } from "node:fs/promises"
@@ -50,6 +53,17 @@ program
 		"per-step timeout in milliseconds",
 		String(DEFAULTS.timeout),
 	)
+	.option(
+		"--model <model>",
+		"LLM model identifier (e.g. anthropic/claude-sonnet-4)",
+		DEFAULTS.model,
+	)
+	.option(
+		"--llm-base-url <url>",
+		"base URL for the OpenAI-compatible LLM API",
+		DEFAULTS.llmBaseUrl,
+	)
+	.option("--debug", "enable verbose debug output", false)
 	.action(
 		async (
 			suites: string[],
@@ -61,6 +75,9 @@ program
 				headed: boolean
 				parallel: string
 				timeout: string
+				model: string
+				llmBaseUrl: string
+				debug: boolean
 			},
 		) => {
 			const config: RunConfig = {
@@ -73,6 +90,8 @@ program
 				parallel: parseInt(opts.parallel, 10),
 				timeout: parseInt(opts.timeout, 10),
 				viewport: { ...DEFAULTS.viewport },
+				model: opts.model,
+				llmBaseUrl: opts.llmBaseUrl,
 			}
 
 			// Resolve glob patterns in suite file paths
@@ -93,6 +112,9 @@ program
 						suite.base_url = config.baseUrl
 					}
 
+					// Apply suite-level model override
+					const effectiveModel = suite.model ?? config.model
+
 					console.log(`\nSuite: ${suite.suite}`)
 					console.log(`URL:   ${suite.base_url}`)
 
@@ -110,19 +132,21 @@ program
 
 						const state = await capturePageState(page, drain)
 
-						// Print a11y tree
-						console.log(`\nAccessibility tree (${suite.base_url}):\n`)
-						console.log(formatA11yTree(state.a11yTree))
+						if (opts.debug) {
+							console.log(`\nAccessibility tree (${suite.base_url}):\n`)
+							console.log(formatA11yTree(state.a11yTree))
 
-						// Save screenshot
-						const screenshotPath = resolve("screenshot.png")
-						await writeFile(
-							screenshotPath,
-							Buffer.from(state.screenshot, "base64"),
-						)
-						console.log(`\nScreenshot saved: ${screenshotPath}`)
-						console.log(`Page title: ${state.title}`)
-						console.log(`Console logs: ${String(state.consoleLogs.length)} entries`)
+							const screenshotPath = resolve("screenshot.png")
+							await writeFile(
+								screenshotPath,
+								Buffer.from(state.screenshot, "base64"),
+							)
+							console.log(`\nScreenshot saved: ${screenshotPath}`)
+							console.log(`Page title: ${state.title}`)
+							console.log(
+								`Console logs: ${String(state.consoleLogs.length)} entries`,
+							)
+						}
 
 						// Print test cases
 						for (const test of suite.tests) {
@@ -133,6 +157,61 @@ program
 							for (const step of test.steps) {
 								console.log(`    - ${step}`)
 							}
+						}
+
+						// Step 5 test harness: resolve + execute first step
+						const firstTest = config.testFilter
+							? suite.tests.find((t) => t.name === config.testFilter)
+							: suite.tests[0]
+
+						if (firstTest && firstTest.steps.length > 0) {
+							const step = firstTest.steps[0]
+							console.log(
+								`\n  Sending step to LLM (${effectiveModel}): "${step}"`,
+							)
+
+							try {
+								const llmConfig = resolveLLMConfig({
+									...config,
+									model: effectiveModel,
+								})
+								const llm = createLLMClient(llmConfig)
+								const action = await llm.resolveStep(step, state)
+								console.log("  LLM action:", JSON.stringify(action))
+
+								// Execute the action
+								console.log("  Executing action...")
+								const result = await executeAction(page, action, state.a11yTree)
+
+								if (result.success) {
+									console.log(
+										`  Action succeeded (${Math.round(result.duration)}ms)`,
+									)
+								} else {
+									console.error(
+										`  Action failed: ${result.error ?? "unknown error"}`,
+									)
+								}
+
+								// Capture post-action state
+								resetRefCounter()
+								const postState = await capturePageState(page, drain)
+
+								if (opts.debug) {
+									console.log(`\n  Post-action a11y tree:\n`)
+									console.log(formatA11yTree(postState.a11yTree))
+								}
+
+								console.log(`  Post-action URL: ${postState.url}`)
+							} catch (err) {
+								if (err instanceof Error) {
+									console.error(`  LLM error: ${err.message}`)
+								}
+							}
+						}
+
+						if (config.headed) {
+							await new Promise((r) => setTimeout(r, 2000))
 						}
 
 						await context.close()

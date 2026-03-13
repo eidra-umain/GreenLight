@@ -28,16 +28,28 @@ export interface RunConfig {
 	timeout: number
 	/** Browser viewport dimensions. */
 	viewport: Viewport
+	/** LLM model identifier (e.g. "anthropic/claude-sonnet-4"). */
+	model: string
+	/** Base URL for the OpenAI-compatible LLM API. */
+	llmBaseUrl: string
 }
 
 /** Default configuration values. */
 export const DEFAULTS: Pick<
 	RunConfig,
-	"reporter" | "headed" | "parallel" | "timeout" | "viewport"
+	| "reporter"
+	| "headed"
+	| "parallel"
+	| "timeout"
+	| "viewport"
+	| "model"
+	| "llmBaseUrl"
 > = {
 	reporter: "cli",
 	headed: false,
 	parallel: 1,
 	timeout: 30_000,
 	viewport: { width: 1280, height: 720 },
+	model: "anthropic/claude-sonnet-4",
+	llmBaseUrl: "https://openrouter.ai/api/v1",
 }

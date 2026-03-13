@@ -27,7 +27,7 @@ tests:
       - check that URL contains "/dashboard"
 ```
 
-The Pilot reads each step, observes the page through accessibility tree snapshots (with screenshot fallback), determines the right browser action via Claude, and executes it through Playwright.
+The Pilot reads each step, observes the page through accessibility tree snapshots (with screenshot fallback), determines the right browser action via an LLM, and executes it through Playwright.
 
 ## Quick start
 
@@ -48,6 +48,9 @@ greenlight run --parallel 4           # concurrent test cases
 greenlight run --reporter json        # json output (also: cli, html)
 greenlight run --output results.json  # write to file
 greenlight run --timeout 15000        # per-step timeout (ms)
+greenlight run --model openai/gpt-4o  # override LLM model
+greenlight run --llm-base-url <url>   # use a different OpenAI-compatible API
+greenlight run --debug                # verbose output (a11y tree, screenshots, logs)
 ```
 
 ## Test syntax
@@ -80,6 +83,51 @@ tests:
       - log in as admin
       - click "Settings"
       - check that page contains "Account Settings"
+```
+
+## Configuration
+
+### API key
+
+Set your API key via environment variable or a `.env` file in the project root:
+
+```bash
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+`LLM_API_KEY` is also supported as a generic fallback for non-OpenRouter providers.
+
+### Model selection
+
+The LLM model is configurable at three levels (highest priority first):
+
+| Level | How | Example |
+|-------|-----|---------|
+| CLI flag | `--model <id>` | `--model openai/gpt-4o` |
+| Suite YAML | `model` field | `model: "anthropic/claude-sonnet-4"` |
+| Default | — | `anthropic/claude-sonnet-4` via OpenRouter |
+
+```yaml
+suite: "Login Flow"
+base_url: "https://staging.example.com"
+model: "google/gemini-2.5-flash"  # optional per-suite override
+
+tests:
+  - name: "User can log in"
+    steps:
+      - click "Sign In"
+```
+
+### Custom LLM endpoint
+
+GreenLight uses the OpenAI-compatible chat completions API. By default it points to OpenRouter, but you can use any compatible provider:
+
+```bash
+# Local Ollama
+greenlight run tests/ --llm-base-url http://localhost:11434/v1 --model llama3
+
+# Direct OpenAI
+LLM_API_KEY=sk-... greenlight run tests/ --llm-base-url https://api.openai.com/v1 --model gpt-4o
 ```
 
 ## Tech stack
