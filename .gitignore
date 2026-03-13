@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Test artifacts
+results.json
+report.html
+*.png
+.playwright-cli/
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript incremental
+*.tsbuildinfo
+
+# Package manager locks (keep one — uncomment the one you don't use)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
