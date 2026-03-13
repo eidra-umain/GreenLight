@@ -1,0 +1,6 @@
+suite: "Bad URL"
+base_url: "not-a-url"
+tests:
+  - name: "Test"
+    steps:
+      - click "Button"

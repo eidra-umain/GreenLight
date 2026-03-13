@@ -1,12 +1,13 @@
 {
-	"permissions": {
-		"allow": [
-			"WebSearch",
-			"Bash(npm install:*)",
-			"Bash(npm run:*)",
-			"Bash(npx greenlight:*)",
-			"Bash(npx eslint:*)",
-			"Bash(npx prettier:*)"
-		]
-	}
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(npx greenlight:*)",
+      "Bash(npx eslint:*)",
+      "Bash(npx prettier:*)",
+      "Bash(npm test:*)"
+    ]
+  }
 }

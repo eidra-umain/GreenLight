@@ -2,7 +2,9 @@
 
 import { Command } from "commander"
 import { DEFAULTS, type RunConfig } from "../types.js"
+import { loadSuite } from "../parser/loader.js"
 import { resolve } from "node:path"
+import { glob } from "node:fs"
 
 const program = new Command()
 
@@ -35,7 +37,7 @@ program
 		String(DEFAULTS.timeout),
 	)
 	.action(
-		(
+		async (
 			suites: string[],
 			opts: {
 				test?: string
@@ -59,8 +61,51 @@ program
 				viewport: { ...DEFAULTS.viewport },
 			}
 
-			console.log("GreenLight — resolved config:\n")
-			console.log(JSON.stringify(config, null, 2))
+			// Resolve glob patterns in suite file paths
+			const resolvedFiles = await resolveGlobs(config.suiteFiles)
+
+			if (resolvedFiles.length === 0) {
+				console.error("No suite files found matching:", config.suiteFiles)
+				process.exit(1)
+			}
+
+			// Load and display each suite
+			for (const file of resolvedFiles) {
+				try {
+					const suite = await loadSuite(file)
+
+					// Apply CLI overrides
+					if (config.baseUrl) {
+						suite.base_url = config.baseUrl
+					}
+
+					console.log(`\nSuite: ${suite.suite}`)
+					console.log(`URL:   ${suite.base_url}`)
+					if (suite.viewport) {
+						console.log(
+							`Viewport: ${String(suite.viewport.width)}x${String(suite.viewport.height)}`,
+						)
+					}
+
+					for (const test of suite.tests) {
+						// Apply test name filter
+						if (config.testFilter && test.name !== config.testFilter) {
+							continue
+						}
+						console.log(`\n  Test: ${test.name}`)
+						for (const step of test.steps) {
+							console.log(`    - ${step}`)
+						}
+					}
+				} catch (err) {
+					console.error(`\nFailed to load suite: ${file}`)
+					if (err instanceof Error) {
+						console.error(err.message)
+					}
+					process.exit(1)
+				}
+			}
+
 			console.log("\nNo runner implemented yet. Exiting.")
 		},
 	)
@@ -71,6 +116,26 @@ function parseReporter(value: string): RunConfig["reporter"] {
 	}
 	console.error(`Invalid reporter "${value}". Must be cli, json, or html.`)
 	process.exit(1)
+}
+
+/** Expand glob patterns into concrete file paths. */
+async function resolveGlobs(patterns: string[]): Promise<string[]> {
+	const files: string[] = []
+	for (const pattern of patterns) {
+		// If pattern has no glob chars, treat as literal path
+		if (!pattern.includes("*")) {
+			files.push(pattern)
+			continue
+		}
+		const matches = await new Promise<string[]>((res, rej) => {
+			glob(pattern, (err, result) => {
+				if (err) rej(err)
+				else res(result)
+			})
+		})
+		files.push(...matches)
+	}
+	return files
 }
 
 program.parse()

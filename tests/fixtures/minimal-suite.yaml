@@ -1,0 +1,6 @@
+suite: "Minimal"
+base_url: "https://example.com"
+tests:
+  - name: "Only test"
+    steps:
+      - click "Button"

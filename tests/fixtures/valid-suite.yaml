@@ -1,0 +1,26 @@
+suite: "Test Suite"
+base_url: "https://example.com"
+viewport:
+  width: 1024
+  height: 768
+variables:
+  username: "alice"
+  greeting: "Hello {{username}}"
+
+reusable_steps:
+  log in:
+    - enter "{{username}}" into "Username"
+    - enter "password123" into "Password"
+    - click "Sign In"
+
+tests:
+  - name: "First test"
+    steps:
+      - log in
+      - check that page contains "Dashboard"
+
+  - name: "Second test"
+    description: "A test with a description"
+    steps:
+      - go to "/about"
+      - check that page contains "About"

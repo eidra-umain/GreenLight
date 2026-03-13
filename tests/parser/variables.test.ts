@@ -1,0 +1,91 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import { interpolate, interpolateSteps } from "../../src/parser/variables.js"
+
+describe("interpolate", () => {
+	it("replaces suite variables", () => {
+		const result = interpolate('enter "{{user}}" into "Name"', {
+			user: "Alice",
+		})
+		expect(result).toBe('enter "Alice" into "Name"')
+	})
+
+	it("replaces multiple variables in one string", () => {
+		const result = interpolate("{{greeting}}, {{name}}!", {
+			greeting: "Hello",
+			name: "Bob",
+		})
+		expect(result).toBe("Hello, Bob!")
+	})
+
+	it("replaces {{timestamp}} with a numeric string", () => {
+		const result = interpolate("user_{{timestamp}}", {})
+		expect(result).toMatch(/^user_\d+$/)
+	})
+
+	it("returns string unchanged when no placeholders", () => {
+		const result = interpolate("click the button", {})
+		expect(result).toBe("click the button")
+	})
+
+	it("throws on unknown variable", () => {
+		expect(() => interpolate("{{missing}}", {})).toThrow(
+			'Unknown variable "{{missing}}"',
+		)
+	})
+
+	it("throws on unknown variable and lists available ones", () => {
+		expect(() => interpolate("{{missing}}", { a: "1", b: "2" })).toThrow(
+			"Available: a, b",
+		)
+	})
+
+	describe("env variables", () => {
+		const originalEnv = process.env
+
+		beforeEach(() => {
+			vi.stubEnv("TEST_VAR", "from-env")
+		})
+
+		afterEach(() => {
+			vi.unstubAllEnvs()
+			process.env = originalEnv
+		})
+
+		it("resolves {{env.X}} from process.env", () => {
+			const result = interpolate("{{env.TEST_VAR}}", {})
+			expect(result).toBe("from-env")
+		})
+
+		it("throws when env var is not set", () => {
+			expect(() => interpolate("{{env.NONEXISTENT_VAR}}", {})).toThrow(
+				'Environment variable "NONEXISTENT_VAR" is not set',
+			)
+		})
+	})
+})
+
+describe("interpolateSteps", () => {
+	it("interpolates all steps in array", () => {
+		const steps = [
+			'enter "{{user}}" into "Email"',
+			'enter "{{pass}}" into "Password"',
+			'click "Sign In"',
+		]
+		const result = interpolateSteps(steps, {
+			user: "alice@test.com",
+			pass: "secret",
+		})
+		expect(result).toEqual([
+			'enter "alice@test.com" into "Email"',
+			'enter "secret" into "Password"',
+			'click "Sign In"',
+		])
+	})
+
+	it("does not mutate the original array", () => {
+		const steps = ['enter "{{x}}" into "Field"']
+		const original = [...steps]
+		interpolateSteps(steps, { x: "val" })
+		expect(steps).toEqual(original)
+	})
+})

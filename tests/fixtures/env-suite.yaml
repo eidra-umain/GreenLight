@@ -1,0 +1,6 @@
+suite: "Env Test"
+base_url: "https://example.com"
+tests:
+  - name: "Uses env var"
+    steps:
+      - enter "{{env.TEST_PASSWORD}}" into "Password"

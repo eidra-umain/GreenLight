@@ -1,0 +1,30 @@
+suite: "Wikipedia Search"
+base_url: "https://en.wikipedia.org"
+viewport:
+  width: 1280
+  height: 720
+variables:
+  search_term: "end-to-end testing"
+
+reusable_steps:
+  search for term:
+    - click "Search Wikipedia"
+    - enter "{{search_term}}" into "Search Wikipedia"
+    - press Enter
+    - check that page contains "{{search_term}}"
+
+tests:
+  - name: "User can search Wikipedia"
+    steps:
+      - search for term
+      - check that URL contains "wiki"
+
+  - name: "User can navigate to main page"
+    steps:
+      - click "Main page"
+      - check that page contains "From today's featured article"
+
+  - name: "User can search and find results"
+    steps:
+      - search for term
+      - check that page does not contain "The page does not exist"
