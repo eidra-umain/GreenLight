@@ -152,6 +152,49 @@ export async function resolveLocator(
 }
 
 /**
+ * Resolve an element by its visible text content.
+ * Used as a fallback when the element isn't in the accessibility tree
+ * (e.g. due to missing ARIA roles in the page markup).
+ */
+async function resolveByText(page: Page, text: string): Promise<Locator> {
+	const candidates: Locator[] = [
+		// Exact text match (link, button, or any element)
+		page.getByRole("link", { name: text, exact: true }),
+		page.getByRole("button", { name: text, exact: true }),
+		page.getByText(text, { exact: true }),
+		// Loose match
+		page.getByRole("link", { name: text }),
+		page.getByRole("button", { name: text }),
+		page.getByText(text),
+	]
+
+	for (const locator of candidates) {
+		const match = await pickVisible(locator)
+		if (match) return match
+	}
+
+	// Last resort — let Playwright handle the error
+	return page.getByText(text)
+}
+
+/**
+ * Resolve a locator from an action's ref or text field.
+ */
+async function resolveActionTarget(
+	page: Page,
+	action: Action,
+	a11yTree: A11yNode[],
+): Promise<Locator> {
+	if (action.ref) {
+		return resolveLocator(page, a11yTree, action.ref)
+	}
+	if (action.text) {
+		return resolveByText(page, action.text)
+	}
+	throw new Error(`${action.action} action requires a ref or text target`)
+}
+
+/**
  * Run an action that might trigger navigation.
  * Listens for a 'framenavigated' event during the action — if one fires,
  * waits for the new page to reach domcontentloaded. If no navigation
@@ -192,22 +235,16 @@ export async function executeAction(
 	try {
 		switch (action.action) {
 			case "click": {
-				if (!action.ref) {
-					throw new Error("click action requires a ref")
-				}
-				const locator = await resolveLocator(page, a11yTree, action.ref)
+				const locator = await resolveActionTarget(page, action, a11yTree)
 				await runWithNavigationHandling(page, () => locator.click())
 				break
 			}
 
 			case "type": {
-				if (!action.ref) {
-					throw new Error("type action requires a ref")
-				}
 				if (!action.value) {
 					throw new Error("type action requires a value")
 				}
-				const locator = await resolveLocator(page, a11yTree, action.ref)
+				const locator = await resolveActionTarget(page, action, a11yTree)
 				// Click the target to focus/activate it (may open an input overlay).
 				// Use navigation handling in case the click triggers a page change.
 				await runWithNavigationHandling(page, () => locator.click())
@@ -220,13 +257,10 @@ export async function executeAction(
 			}
 
 			case "select": {
-				if (!action.ref) {
-					throw new Error("select action requires a ref")
-				}
 				if (!action.value) {
 					throw new Error("select action requires a value")
 				}
-				const locator = await resolveLocator(page, a11yTree, action.ref)
+				const locator = await resolveActionTarget(page, action, a11yTree)
 				await locator.selectOption({ label: action.value })
 				break
 			}

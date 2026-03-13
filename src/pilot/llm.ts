@@ -48,9 +48,9 @@ You receive a plain-English test step and the current page state (an accessibili
 Your job is to determine the SINGLE browser action needed to execute the step.
 
 Available actions:
-- click: Click an element. Requires "ref".
-- type: Type text into an input. Requires "ref" and "value".
-- select: Select an option from a dropdown. Requires "ref" and "value" (the option label).
+- click: Click an element. Requires "ref" or "text".
+- type: Type text into an input. Requires "ref" or "text", and "value".
+- select: Select an option from a dropdown. Requires "ref" or "text", and "value" (the option label).
 - scroll: Scroll the page. Requires "value" ("up" or "down"). Optional "ref" to scroll a specific element.
 - navigate: Navigate to a URL. Requires "value" (the URL or path).
 - press: Press a keyboard key. Requires "value" (key name, e.g. "Enter", "Tab", "Escape").
@@ -58,11 +58,17 @@ Available actions:
 - assert: Check a condition on the page. Requires "assertion" with "type" and "expected".
   Assertion types: "contains_text", "not_contains_text", "url_contains", "element_visible", "element_not_visible", "link_exists", "field_exists".
 
+Element targeting:
+- Use "ref" when the target element appears in the accessibility tree (preferred).
+- Use "text" when the target is NOT in the accessibility tree but is visible on the page. The text value should match the visible text of the element you want to interact with. This is common when page markup lacks proper ARIA roles.
+- Never guess a ref. If the element you need is not in the tree, use "text" instead.
+
 IMPORTANT: Any step that starts with "check that" is ALWAYS an assertion. Never return a click, type, or other interaction for a "check that" step.
 
 Respond with ONLY a JSON object. No markdown, no explanation. Example responses:
 
 {"action":"click","ref":"e5"}
+{"action":"click","text":"Till företaget"}
 {"action":"type","ref":"e3","value":"jane@example.com"}
 {"action":"select","ref":"e8","value":"Canada"}
 {"action":"navigate","value":"/products"}
@@ -92,9 +98,11 @@ Action syntax (one per line):
 
 Rules:
 - Any step that says "check that" or "verify" or similar language is ALWAYS an assertion.
-- For assertions, preserve the FULL expected text exactly as written in the step. Never truncate or shorten it.
+- Assertions with explicit quoted strings (e.g. check that the page contains "Welcome") can be resolved as literal assertions: assert contains_text "Welcome"
+- Assertions WITHOUT quoted strings describe something conceptual (e.g. "check that the page contains a Leads form", "check that there is a contact section"). These CANNOT be pre-resolved because the actual page text may differ from the description. Output PAGE with the full step as description so the runtime LLM can inspect the page.
+- For assertions that CAN be resolved, preserve the FULL expected text exactly as written. Never truncate or shorten it.
 - Steps that require seeing the page to identify interactive elements → PAGE with a description.
-- IMPORTANT: When a step lists multiple items separated by dashes, commas, or "then", each item is a SEPARATE action and must be output on its own line. 
+- IMPORTANT: When a step lists multiple items separated by dashes, commas, or "then", each item is a SEPARATE action and must be output on its own line.
   For example, the input step "Select Red - Green - Blue in the color picker" must produce three lines:
   PAGE "click Red in the color picker"
   PAGE "click Green in the color picker"
@@ -175,6 +183,9 @@ export function parseActionResponse(raw: string): Action {
 
 	if (typeof obj.ref === "string") {
 		action.ref = obj.ref
+	}
+	if (typeof obj.text === "string") {
+		action.text = obj.text
 	}
 	if (typeof obj.value === "string") {
 		action.value = obj.value

@@ -93,6 +93,8 @@ export interface Action {
 	action: string
 	/** Element ref from the a11y tree (e.g. "e5"). */
 	ref?: string
+	/** Visible text to target when the element is not in the a11y tree. */
+	text?: string
 	/** Value to type, URL to navigate to, option to select, etc. */
 	value?: string
 	/** Assertion details for assert actions. */

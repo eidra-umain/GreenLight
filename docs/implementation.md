@@ -15,6 +15,7 @@ greenlight/
 ├── src/
 │   ├── cli/                  # CLI entry point and argument parsing
 │   │   └── index.ts
+│   ├── config.ts             # greenlight.yaml loader, deployment resolution
 │   ├── parser/               # YAML suite loading, validation, variable resolution
 │   │   ├── schema.ts         # Zod schemas for suite/test/step definitions
 │   │   ├── loader.ts         # File reading, YAML parsing, validation
@@ -22,12 +23,19 @@ greenlight/
 │   ├── runner/               # Test orchestration and parallelism
 │   │   └── runner.ts
 │   ├── pilot/                # The Pilot — core AI agent loop
-│   │   ├── pilot.ts          # Step loop: capture → LLM → execute → report
+│   │   ├── pilot.ts          # Step loop: plan → capture → LLM → execute → report
 │   │   ├── state.ts          # Page state capture (a11y snapshot + screenshot)
-│   │   ├── llm.ts            # Claude API client, prompt construction, response parsing
-│   │   └── executor.ts       # Action executor — translates LLM actions to Playwright calls
+│   │   ├── llm.ts            # LLM client, prompt construction, response parsing
+│   │   ├── executor.ts       # Action executor — translates LLM actions to Playwright calls
+│   │   └── trace.ts          # Trace logger for performance analysis
 │   ├── browser/              # Playwright wrapper
 │   │   └── browser.ts        # Browser/context lifecycle, low-level Playwright helpers
+│   ├── planner/              # Cached heuristic test plans
+│   │   ├── plan-types.ts     # HeuristicStep, HeuristicPlan, PlanMetadata types
+│   │   ├── hasher.ts         # SHA-256 hash of effective test definitions
+│   │   ├── plan-store.ts     # Read/write plans and hashes in .greenlight/
+│   │   ├── plan-generator.ts # Records concrete actions during discovery runs
+│   │   └── plan-runner.ts    # Replays cached plans without LLM calls
 │   ├── reporter/             # Result collection and output formatting
 │   │   ├── types.ts          # Shared result types (StepResult, TestResult, SuiteResult)
 │   │   ├── cli-reporter.ts   # Colored terminal output
@@ -56,7 +64,7 @@ greenlight/
 
 **What to implement:**
 1. Initialize the TypeScript project: `tsconfig.json` with ESM output, strict mode.
-2. Add dependencies: `typescript`, `commander` (lightweight CLI framework).
+2. Add dependencies: `typescript`, `commander` (CLI framework), `dotenv` (env file loading).
 3. Create `src/cli/index.ts` with the `run` command accepting all flags from the spec:
    - positional: suite file path(s) (optional, defaults to `./tests/**/*.yaml`)
    - `--test <name>` — filter by test case name
@@ -65,8 +73,12 @@ greenlight/
    - `--output <path>` — write report to file
    - `--headed` — visible browser
    - `--parallel <n>` — concurrency (default: 1)
-   - `--timeout <ms>` — per-step timeout
+   - `--timeout <ms>` — per-step timeout (default: 30000)
+   - `--deployment <name>` — select named deployment from greenlight.yaml
+   - `--debug` — verbose debug output
+   - `--trace` — log timestamped browser events for performance analysis
 4. Wire up `bin` entry in `package.json` so `npx greenlight` works.
+5. Add `src/config.ts` — loads optional `greenlight.yaml` from project root. Supports `suites` (glob patterns), deployment configs, and config field merging (CLI flags > deployment > top-level > defaults).
 5. The `run` handler should parse args, print the resolved config, and exit. No actual execution yet.
 
 **Verify:**
@@ -90,7 +102,7 @@ npx greenlight run examples/demo.yaml --headed --parallel 2
 
 **What to implement:**
 1. Define Zod schemas matching the spec's YAML format:
-   - `SuiteSchema`: `suite`, `base_url`, `viewport?`, `variables?`, `reusable_steps?`, `tests`
+   - `SuiteSchema`: `suite`, `base_url?` (optional — can come from greenlight.yaml or CLI), `viewport?`, `model?`, `variables?`, `reusable_steps?`, `tests`
    - `TestCaseSchema`: `name`, `description?`, `steps`
    - Steps are plain strings at this stage.
 2. `loader.ts`: reads file, parses YAML (`yaml` package), validates with Zod, returns typed `Suite`.
@@ -123,13 +135,16 @@ npx greenlight run examples/demo.yaml
    - `createPage(context)` — creates a new page within a context.
    - `closeBrowser(browser)` — cleanup.
 2. `state.ts`:
-   - `capturePageState(page): PageState` — returns:
-     - `a11ySnapshot`: Playwright's `page.accessibility.snapshot()` result, serialized to a readable format with element refs assigned.
-     - `screenshot`: base64 PNG of the viewport.
+   - `attachConsoleCollector(page)` — attaches a console event listener and returns a `drain()` function that retrieves and clears collected entries.
+   - `capturePageState(page, consoleDrain, options?)` — returns:
+     - `a11yTree`: Playwright's `page.locator("body").ariaSnapshot()` result, parsed into a tree of `A11yNode` objects with element refs assigned.
+     - `a11yRaw`: the raw aria snapshot text.
+     - `screenshot`: optional base64 PNG of the viewport (only captured when `options.screenshot` is true — skipped on pre-action captures to avoid triggering lazy-loaded elements).
      - `url`: current page URL.
      - `title`: page title.
-     - `consoleLogs`: any console messages captured since last call.
-   - Element ref assignment: traverse the a11y tree and assign sequential `ref` IDs (`e1`, `e2`, ...) to each interactive node.
+     - `consoleLogs`: console messages from the drain.
+   - `parseA11ySnapshot(raw)` — parses the YAML-like ariaSnapshot output into a tree of `A11yNode` objects. Interactive roles (link, button, textbox, etc.) get sequential refs (`e1`, `e2`, ...); non-interactive structural roles get pseudo-refs (`_role`).
+   - `formatA11yTree(nodes)` — formats the parsed tree as readable text for LLM consumption and debug output.
 3. CLI `run` handler now: loads suite → launches browser → navigates to `base_url` → calls `capturePageState` → prints the a11y snapshot and saves the screenshot to disk → closes browser.
 
 **Verify:**
@@ -152,17 +167,18 @@ npx greenlight run examples/demo.yaml --headed
 
 **What to implement:**
 1. `llm.ts`:
-   - `createLLMClient(config): LLMClient` — returns a client that talks to an OpenAI-compatible endpoint (default: OpenRouter). No vendor SDK needed — use plain `fetch` against the `/chat/completions` endpoint. Configuration:
+   - `createLLMClient(config): LLMClient` — returns a client that talks to an OpenAI-compatible endpoint (default: OpenRouter). No vendor SDK — uses plain `fetch` against the `/chat/completions` endpoint. Configuration:
      - `apiKey` — from `OPENROUTER_API_KEY` env var (or `LLM_API_KEY` as a generic fallback).
      - `baseUrl` — defaults to `https://openrouter.ai/api/v1` but overridable for any OpenAI-compatible provider (e.g., direct OpenAI, local Ollama, etc.).
      - `model` — configurable per suite in YAML (`model` field) or via CLI `--model` flag. Default: `anthropic/claude-sonnet-4` via OpenRouter.
-   - `resolveStep(step, pageState): Action` — constructs a chat completion request:
-     - **System message:** the Pilot's persona, the list of available actions (click, type, select, scroll, navigate, wait, assert, etc.), and the expected JSON response format.
-     - **User message:** the plain-English step + the a11y snapshot (as text). Screenshot attached as an image content block (base64 data URL) only when a11y-only resolution fails.
-   - Parses the LLM response into a typed `Action` object: `{ action: string, ref?: string, value?: string, assertion?: object }`.
-   - Handles retries on malformed responses (re-prompt with clarification).
-2. Define the `Action` type and the system prompt template in clear, versionable constants.
-3. Add `model` field to `SuiteSchema` (optional, overridable) and `--model` flag to CLI. Add `model`, `llmBaseUrl` to `RunConfig`.
+   - The `LLMClient` interface has three methods:
+     - `planSteps(steps[]): PlannedStep[]` — sends all test steps to the LLM in one request with a planning system prompt (`PLAN_SYSTEM_PROMPT`). The LLM returns a line-based format where each step is either a pre-resolved action (assert, navigate, press, scroll) or a `PAGE "description"` marker for steps needing runtime resolution. Compound steps may be split into multiple atomic actions.
+     - `resolveStep(step, pageState): Action` — for page-dependent steps: sends the step + formatted a11y tree to the LLM with the execution system prompt (`SYSTEM_PROMPT`). Maintains conversation history within a test case for context. Caches results for identical step+URL combinations.
+     - `resetHistory()` — clears conversation history (called between test cases).
+   - `parseActionResponse(raw)` — parses LLM JSON response into a typed `Action` object: `{ action, ref?, text?, value?, assertion? }`. Strips markdown code fences. Validates action type against allowed list. The `text` field allows targeting elements by visible text when they lack ARIA markup.
+   - `parsePlanResponse(raw)` — parses the line-based planning output into `PlannedStep[]`.
+2. Define the `Action` type (in `reporter/types.ts`) and system prompt templates as clear, versionable constants.
+3. `model` field already added to `SuiteSchema` (optional, overridable) and `--model` flag to CLI in prior steps.
 4. Temporary test harness in the CLI: loads suite → opens browser → navigates → captures state → sends the first step of the first test to the LLM → prints the returned action → exits.
 
 **Verify:**
@@ -193,15 +209,19 @@ LLM_API_KEY=sk-... npx greenlight run examples/demo.yaml \
 
 **What to implement:**
 1. `executor.ts`:
-   - `executeAction(page, action, a11ySnapshot): ExecutionResult` — switch on `action.action`:
-     - `click` — resolve `action.ref` to a Playwright locator via the a11y snapshot (find the node by ref, use its role + name to build `page.getByRole(...)`), then click.
-     - `type` / `enter` — resolve target field by ref, clear if needed, type `action.value`.
-     - `select` — resolve select element, select option by label.
-     - `scroll` — `page.mouse.wheel()` or scroll to element.
-     - `navigate` — `page.goto(action.value)` or `page.goBack()`.
-     - `wait` — `page.waitForSelector` / `page.waitForTimeout` based on action params.
-     - `press` — `page.keyboard.press(action.value)`.
-   - Ref resolution helper: given a ref ID and the a11y tree, return the matching Playwright locator. Uses the node's `role` and `name` to construct `page.getByRole(role, { name })`.
+   - `executeAction(page, action, a11yTree): ExecutionResult` — switch on `action.action`:
+     - `click` — resolve target locator, click with navigation handling.
+     - `type` — resolve target, click to focus, clear with Ctrl+A + Backspace, type character-by-character with 30ms delay for proper JS event triggering.
+     - `select` — resolve target, `selectOption({ label })`.
+     - `scroll` — if ref provided, `scrollIntoViewIfNeeded()`; otherwise `page.mouse.wheel(0, ±500)`.
+     - `navigate` — `page.goto(url, { waitUntil: "domcontentloaded" })`. Resolves relative paths against current URL.
+     - `wait` — `page.getByText(value).waitFor({ state: "visible" })`.
+     - `press` — `page.keyboard.press(key)` with navigation handling.
+     - `assert` — calls `executeAssertion()` which evaluates assertions directly (no LLM needed).
+   - **Multi-strategy locator resolution** (`resolveLocator`): given a ref and the a11y tree, tries locators in order: (1) chained hierarchy through named ancestors, (2) direct `getByRole(role, { name, exact: true })`, (3) `getByLabel(name)`, (4) `getByPlaceholder(name)`, (5) loose `getByRole(role, { name })`. Returns first locator matching a single visible element.
+   - **Text fallback** (`resolveByText`): when the action has a `text` field instead of `ref`, locates elements by visible text using `getByRole("link"/"button")` and `getByText` with exact and loose matching.
+   - **Navigation handling** (`runWithNavigationHandling`): wraps click/press actions. Listens for `framenavigated` events; if triggered, waits for `domcontentloaded`.
+   - **Assertion evaluation**: positive assertions (contains_text, element_visible, link_exists, field_exists) are polled with 250ms intervals up to 5s timeout. Negative assertions (not_contains_text, element_not_visible) and URL checks run once immediately.
    - Returns `ExecutionResult`: `{ success, duration, error? }`.
 2. Wire into the CLI: loads suite → opens browser → navigates → for the first step: capture → LLM → execute → capture post-state → print before/after → exits.
 
@@ -225,30 +245,129 @@ OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
 
 **What to implement:**
 1. `pilot.ts`:
-   - `runTestCase(page, testCase, config): TestCaseResult` — for each step:
-     1. Capture page state (`state.ts`).
-     2. Send step + state to LLM (`llm.ts`).
-     3. Execute returned action (`executor.ts`).
-     4. Capture post-action screenshot (for reporting).
-     5. For assertion steps: evaluate the assertion against the post-action state (check page contains text, check element value, etc.).
-     6. Record `StepResult`: `{ step, action, status, duration, screenshot, error?, reasoning }`.
-     7. On failure: stop remaining steps in this test case (fail-fast).
+   - `runTestCase(page, testCase, llm, options): TestCaseResult` — the LLM client is injected (not created internally). `PilotOptions` includes: `timeout`, `consoleDrain`, `debug`, and optional `trace` (TraceLogger).
+   - **Planning phase**: calls `llm.planSteps(testCase.steps)` to pre-plan all steps. If planning fails, falls back to runtime resolution for all steps. Debug mode prints the plan input and output.
+   - **Execution phase** — for each planned step:
+     1. If action was pre-resolved (from planning): execute directly, skip capture and LLM.
+     2. If needs page state: reset ref counter, capture a11y tree via `capturePageState()` (without screenshot), send to `llm.resolveStep()`, get action.
+     3. Execute action via `executeAction()`. Assertions are evaluated directly by the executor (not by the LLM).
+     4. On failure: record failed step result and break (fail-fast).
+     5. On success: capture post-action screenshot for reporting. If page is mid-navigation, wait for `domcontentloaded` and retry capture.
+     6. Record `StepResult`: `{ step, action, status, duration, timing?, screenshot?, error? }`.
+   - `StepTiming` tracks per-phase breakdown: capture, llm, execute, postCapture (all in ms).
    - Returns `TestCaseResult`: `{ name, status, steps: StepResult[], duration }`.
-2. Handle assertion steps: the LLM is asked to evaluate assertions against the page state and return `{ action: "assert", pass: boolean, reason: string }`.
-3. Handle vision fallback: if the LLM responds with low confidence or requests a screenshot, re-send with the screenshot attached.
-4. CLI now runs all steps of the first test case and prints step-by-step results.
+2. `trace.ts` — optional trace logger enabled with `--trace`:
+   - `createTraceLogger(enabled)` — returns TraceLogger (no-op if disabled).
+   - `log(event, detail?)` — logs timestamped events.
+   - `attachToPage(page)` / `detachFromPage(page)` — listens for page events (framenavigated, load, domcontentloaded, request/response for document/xhr/fetch, console errors). Filters noise from media files and tracking domains.
+3. CLI now runs all steps of all test cases (iterating tests within a suite) and prints step-by-step results with timing breakdowns. Each test case gets a fresh browser context. The LLM history is reset between test cases.
 
 **Verify:**
 ```bash
 OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
-# → runs all steps of the first test case
-# → prints per-step pass/fail with action details
-# → stops on first failure with error explanation
+# → runs all steps of all test cases
+# → prints per-step pass/fail with timing breakdowns
+# → stops on first failure within each test case
+# → prints PASSED/FAILED per test with total duration
+
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --debug
+# → also prints plan input/output, a11y trees, and action JSON
+
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --trace
+# → also prints timestamped browser events
 ```
 
 ---
 
-## Step 7 — Test runner and multi-test orchestration
+## Step 7 — Cached heuristic test plans
+
+**Goal:** After a successful LLM-driven test run (discovery run), GreenLight generates and caches a heuristic test plan — a concrete, element-bound action sequence that can be replayed without LLM calls. Subsequent runs use the cached plan for fast execution. Changes to the source test definition (detected via SHA-256 hash) trigger a fresh discovery run.
+
+**Modules introduced:**
+- `src/planner/plan-types.ts` — types for heuristic plans (`HeuristicStep`, `HeuristicPlan`, `PlanMetadata`)
+- `src/planner/hasher.ts` — computes SHA-256 hash of a test case's effective definition (post variable/reusable-step expansion)
+- `src/planner/plan-store.ts` — reads/writes plan files and `hashes.json` in `.greenlight/plans/`
+- `src/planner/plan-generator.ts` — hooks into the Pilot loop to record concrete actions during a discovery run and produce a `HeuristicPlan`
+- `src/planner/plan-runner.ts` — replays a cached `HeuristicPlan` directly via Playwright (no LLM)
+
+**What to implement:**
+
+1. `plan-types.ts`:
+   - `HeuristicStep`: `{ originalStep: string, action: string, selector: { role, name, exact? }, value?: string, assertion?: { type, selector, expected }, postStepFingerprint: { url, title, keyElements: string[] } }`.
+   - `HeuristicPlan`: `{ suiteSlug: string, testSlug: string, sourceHash: string, model: string, generatedAt: string, greenlightVersion: string, steps: HeuristicStep[] }`.
+
+2. `hasher.ts`:
+   - `computeTestHash(testCase, suiteVariables, reusableSteps): string` — takes the fully resolved test case (after variable interpolation and reusable step expansion), serializes it deterministically, and returns its SHA-256 hash.
+
+3. `plan-store.ts`:
+   - `loadHashIndex(projectRoot): Record<string, string>` — reads `.greenlight/hashes.json`.
+   - `saveHashIndex(projectRoot, index)` — writes the hash index.
+   - `loadPlan(projectRoot, suiteSlug, testSlug): HeuristicPlan | null` — reads a cached plan file.
+   - `savePlan(projectRoot, plan)` — writes a plan file to `.greenlight/plans/{suiteSlug}/{testSlug}.json`.
+   - `deletePlan(projectRoot, suiteSlug, testSlug)` — removes a stale plan.
+   - Slug generation: kebab-case from suite/test names.
+
+4. `plan-generator.ts`:
+   - `createPlanRecorder(testCase, suiteConfig): PlanRecorder` — returns a recorder that the Pilot calls after each step.
+   - `recorder.recordStep(step, action, resolvedSelector, postPageState)` — captures the concrete selector (role + name extracted from the a11y node that was acted upon), the action, and a post-step fingerprint.
+   - `recorder.finalize(): HeuristicPlan` — produces the complete plan with metadata and source hash.
+   - Integrates with `pilot.ts`: after each successful step execution, call the recorder. On test case completion, finalize and save the plan.
+
+5. `plan-runner.ts`:
+   - `runCachedPlan(page, plan, config): TestCaseResult` — for each `HeuristicStep`:
+     1. Build a Playwright locator from `selector` (e.g., `page.getByRole(role, { name })`).
+     2. Execute the action directly (click, fill, etc.) — no LLM involved.
+     3. For assertion steps: evaluate the concrete assertion against the page.
+     4. Validate the post-step fingerprint. On significant drift (element not found, unexpected URL), mark the step as a **plan drift** failure.
+   - Returns a `TestCaseResult` with a `mode: "cached"` indicator.
+
+6. Update `pilot.ts`:
+   - Accept an optional `PlanRecorder` and call it during step execution.
+   - After a successful test case run in discovery mode, save the plan via `plan-store.ts`.
+
+7. Update the CLI / run logic:
+   - Before running a test case, compute its source hash and check against `hashes.json`.
+   - If a valid cached plan exists → use `plan-runner.ts` (fast run).
+   - If no plan or hash mismatch → use the full Pilot loop (discovery run), then save the new plan.
+   - Add CLI flags:
+     - `--discover` — force discovery run, ignore cached plans.
+     - `--on-drift <fail|rerun>` — behavior on plan drift (default: `fail`).
+     - `--plan-status` — print cache status for all test cases and exit.
+
+8. Create `.greenlight/` directory structure on first discovery run. Add `.greenlight/` to the project's `.gitignore` if it exists.
+
+**Verify:**
+```bash
+# First run: discovery mode (no cached plans exist)
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
+# → runs all steps via LLM
+# → saves heuristic plans to .greenlight/plans/
+# → prints "Cached plan generated for: User can complete checkout"
+
+# Second run: fast mode (cached plans used)
+npx greenlight run examples/demo.yaml
+# → runs without LLM calls, significantly faster
+# → prints "Using cached plan for: User can complete checkout"
+
+# Modify a step in the YAML, then run again
+npx greenlight run examples/demo.yaml
+# → detects hash mismatch for modified test case
+# → runs discovery for that test case, fast run for unchanged ones
+# → prints "Plan stale, re-discovering: User can complete checkout"
+
+# Force discovery run
+OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --discover
+# → ignores all cached plans, runs full LLM loop
+
+# Check plan status
+npx greenlight run examples/demo.yaml --plan-status
+# → demo-flow/user-can-complete-checkout: cached (hash: abc123, generated: 2025-01-15)
+# → demo-flow/user-sees-error: no cached plan
+```
+
+---
+
+## Step 8 — Test runner and multi-test orchestration
 
 **Goal:** `npx greenlight run` executes all test cases in a suite (sequentially), reports results for each.
 
@@ -260,7 +379,7 @@ OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
    - `runSuite(suite, config): SuiteResult` — for each test case:
      1. Create a fresh Browser Context (isolated cookies/storage).
      2. Create a page, navigate to `base_url`.
-     3. Instantiate a Pilot and call `runTestCase`.
+     3. Check for a valid cached plan; if available, use `plan-runner.ts`, otherwise instantiate a Pilot and call `runTestCase`.
      4. Close the context.
      5. Collect `TestCaseResult`.
    - Returns `SuiteResult`: `{ suite, results: TestCaseResult[], duration, passed, failed }`.
@@ -271,6 +390,7 @@ OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --headed
 ```bash
 OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml
 # → runs all test cases in the suite sequentially
+# → uses cached plans where available, discovery runs otherwise
 # → prints per-test and per-step results
 # → exits 0 if all pass, 1 if any fail
 
@@ -280,7 +400,7 @@ npx greenlight run examples/demo.yaml --test "User can search"
 
 ---
 
-## Step 8 — CLI reporter
+## Step 9 — CLI reporter
 
 **Goal:** Polished terminal output with colors, icons, and a clear summary.
 
@@ -311,7 +431,7 @@ OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml
 
 ---
 
-## Step 9 — JSON reporter
+## Step 10 — JSON reporter
 
 **Goal:** `--reporter json` outputs machine-readable results.
 
@@ -334,7 +454,7 @@ cat results.json | jq '.results[0].status'
 
 ---
 
-## Step 10 — Parallel execution
+## Step 11 — Parallel execution
 
 **Goal:** `--parallel N` runs N test cases concurrently within a suite.
 
@@ -358,7 +478,7 @@ OPENROUTER_API_KEY=sk-... npx greenlight run examples/demo.yaml --parallel 4 --h
 
 ---
 
-## Step 11 — HTML reporter
+## Step 12 — HTML reporter
 
 **Goal:** `--reporter html` generates a self-contained HTML report with embedded screenshots.
 
@@ -385,7 +505,7 @@ open report.html
 
 ---
 
-## Step 12 — Retry logic and robustness
+## Step 13 — Retry logic and robustness
 
 **Goal:** Transient failures are retried automatically. Step timeouts are enforced.
 
@@ -411,7 +531,7 @@ OPENROUTER_API_KEY=sk-... npx greenlight run examples/retry-demo.yaml --headed -
 
 ---
 
-## Step 13 — Environment variables, secrets, and cookie injection
+## Step 14 — Environment variables, secrets, and cookie injection
 
 **Goal:** Credentials sourced from env vars, sensitive values redacted in output, optional cookie-based auth.
 
@@ -447,10 +567,11 @@ ADMIN_PASSWORD=s3cret OPENROUTER_API_KEY=sk-... npx greenlight run examples/auth
 | 4 | `greenlight run demo.yaml` → sends step to LLM, prints action | pilot/llm |
 | 5 | `greenlight run demo.yaml` → executes one step in browser | pilot/executor |
 | 6 | `greenlight run demo.yaml` → runs all steps of one test | pilot/pilot |
-| 7 | `greenlight run demo.yaml` → runs all tests in suite | runner |
-| 8 | `greenlight run demo.yaml` → polished CLI output | reporter/cli |
-| 9 | `greenlight run demo.yaml --reporter json` | reporter/json |
-| 10 | `greenlight run demo.yaml --parallel 4` | runner (concurrency) |
-| 11 | `greenlight run demo.yaml --reporter html` | reporter/html |
-| 12 | Transient failures auto-retry | pilot (retry) |
-| 13 | `{{env.X}}`, secrets redaction, cookie auth | parser, reporter, browser |
+| 7 | `greenlight run demo.yaml` → caches heuristic plans, fast re-runs | planner |
+| 8 | `greenlight run demo.yaml` → runs all tests in suite | runner |
+| 9 | `greenlight run demo.yaml` → polished CLI output | reporter/cli |
+| 10 | `greenlight run demo.yaml --reporter json` | reporter/json |
+| 11 | `greenlight run demo.yaml --parallel 4` | runner (concurrency) |
+| 12 | `greenlight run demo.yaml --reporter html` | reporter/html |
+| 13 | Transient failures auto-retry | pilot (retry) |
+| 14 | `{{env.X}}`, secrets redaction, cookie auth | parser, reporter, browser |
