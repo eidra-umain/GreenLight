@@ -4,30 +4,49 @@
 
 # GreenLight
 
-AI-driven end-to-end testing for web applications. Write tests as plain-English user stories, and an AI agent (the Pilot) executes them against your staging environment using a real browser.
+Natural language driven end-to-end testing for web applications. Write tests as plain-English user stories, and an AI agent (the Pilot) executes them against your staging environment using a real browser.
 
 No selectors. No XPaths. No test IDs. Just describe what a user would do.
 
 ## How it works
 
 ```yaml
-suite: "Login Flow"
+suite: "Product Search"
 base_url: "https://staging.example.com"
-variables:
-  user_email: "jane@example.com"
-  user_password: "{{env.TEST_PASSWORD}}"
 
 tests:
-  - name: "User can log in and see dashboard"
+  - name: "Filtering reduces results"
     steps:
-      - enter "{{user_email}}" into "Email"
-      - enter "{{user_password}}" into "Password"
-      - click "Sign In"
-      - check that page contains "Welcome back, Jane"
-      - check that URL contains "/dashboard"
+      - navigate to Products from the main menu
+      - remember the number of results shown
+      - select "Electronics" in the category filter
+      - check that the number of results has decreased
+      - search for "wireless headphones"
+      - check that the page contains "wireless"
+      - fill in the inquiry form with email "test@example.com" and some test data
+      - submit the form
+      - check that you see "Thanks for your inquiry"
 ```
 
-The Pilot reads each step, observes the page through accessibility tree snapshots (with screenshot fallback), determines the right browser action via an LLM, and executes it through Playwright.
+No selectors, no drivers or glue code. GreenLight understands form wizards, custom dropdowns, autocomplete fields, and checkbox consent flows. It fills in forms with realistic test data, handles before/after value comparisons, and works with any UI framework.
+
+The first run uses an LLM to discover the right actions (the **discovery run**). After that, GreenLight caches a concrete action plan and replays it without LLM calls — making subsequent runs fast and free.
+
+```
+  Suite: Product Search
+  URL:   https://staging.example.com
+
+    Test: Filtering reduces results [cached]
+      ✓ navigate to Products from the main menu (0.8s)
+      ✓ remember the number of results shown (0.3s)
+      ✓ select "Electronics" in the category filter (1.1s)
+      ✓ check that the number of results has decreased (0.2s)
+      ✓ search for "wireless headphones" (0.9s)
+      ✓ check that the page contains "wireless" (0.1s)
+      ✓ fill in the inquiry form (3.2s)
+
+    PASSED [cached] (6.6s)
+```
 
 ## Quick start
 
@@ -136,7 +155,11 @@ greenlight run -o, --output results.json  # write to file
 greenlight run --timeout 15000          # per-step timeout (ms)
 greenlight run --model openai/gpt-4o    # override LLM model
 greenlight run --llm-base-url <url>     # use a different OpenAI-compatible API
-greenlight run --debug                  # verbose output (a11y tree, actions, timings)
+greenlight run --debug                  # verbose output (actions, LLM modes, timings)
+greenlight run --trace                  # timestamped browser events for perf analysis
+greenlight run --discover               # force discovery run, ignore cached plans
+greenlight run --plan-status            # show cache status for all tests
+greenlight run --on-drift rerun         # re-discover on cached plan drift (default: fail)
 ```
 
 ## GreenLight philosopy compared to Gherkin/Cucumber
@@ -162,16 +185,36 @@ Tests are plain English. The Pilot interprets intent, so phrasing is flexible. C
 
 | Action | Example |
 |--------|---------|
-| Navigate | `go to "/products"` |
-| Click | `click "Add to Cart" next to "Widget Pro"` |
+| Navigate | `go to "/products"` or `navigate to About from the menu` |
+| Click | `click "Add to Cart"` or `click the Submit button` |
 | Type | `enter "jane@example.com" into "Email"` |
-| Select | `select "Canada" from "Country"` |
-| Scroll | `scroll down until "Footer" is visible` |
-| Wait | `wait up to 10 seconds until "Dashboard" is visible` |
+| Select | `select "Canada" from "Country"` (works with native and custom dropdowns) |
+| Form fill | `fill in the contact form with email "a@b.com" and some test data` |
+| Autocomplete | `type "Stock" into the city field and select the first suggestion` |
+| Check | `check the "I agree to terms" checkbox` |
+| Remember | `remember the number of search results` |
+| Compare | `check that the number of results is less than before` |
 | Assert | `check that page contains "Order Confirmed"` |
-| Variable | `save text from "Confirmation Code" as "code"` |
+| Multi-step | `Select Red - Green - Blue in the color picker` (auto-split into 3 clicks) |
 
-Reusable steps can be defined at the suite level and invoked by name:
+### Form filling
+
+Steps like "fill in the form with some test data and submit it" are automatically expanded at runtime. GreenLight inspects the actual form fields (labels, placeholders, input types) and generates appropriate test data. Autocomplete fields are detected and handled with type-wait-select flows. Consent checkboxes are automatically checked.
+
+### Value comparisons
+
+Remember a value before an action, then compare after:
+
+```yaml
+steps:
+  - remember the total shown in the results badge
+  - apply the "In Stock" filter
+  - check that the total has decreased
+```
+
+### Reusable steps
+
+Define common sequences at the suite level and invoke by name:
 
 ```yaml
 reusable_steps:
@@ -186,6 +229,18 @@ tests:
       - log in as admin
       - click "Settings"
       - check that page contains "Account Settings"
+```
+
+## Cached plans
+
+The first run of a test uses LLM calls to discover the right browser actions (**discovery run**). After a successful run, GreenLight caches the concrete action sequence as a **heuristic plan** in `.greenlight/plans/`.
+
+Subsequent runs replay the cached plan directly via Playwright — no LLM calls, no API costs, significantly faster. If you change the test steps in YAML, the hash changes and GreenLight automatically re-discovers.
+
+```bash
+greenlight run                    # uses cached plans where available
+greenlight run --discover         # force fresh discovery, ignore cache
+greenlight run --plan-status      # show which tests have cached plans
 ```
 
 ## Configuration
@@ -244,30 +299,39 @@ flowchart TD
 
         subgraph runner[Test Runner]
             orchestrator[Orchestration<br/>parallelism, setup/teardown]
+            planner[Plan Cache<br/>.greenlight/plans/]
 
-            subgraph pilot[The Pilot — per test case]
-                state[Page State Capture<br/>a11y snapshot, screenshot, logs]
-                llm[LLM Client<br/>OpenRouter / OpenAI-compatible]
-                executor[Action Executor<br/>Playwright]
+            subgraph pilot[The Pilot — discovery run]
+                state[Page State Capture<br/>a11y snapshot + stable refs]
+                llm[LLM Client<br/>plan, resolve, expand]
+                executor[Action Executor<br/>click, type, select, autocomplete,<br/>check, remember, compare, ...]
             end
+
+            replay[Plan Runner<br/>cached replay, no LLM]
         end
     end
 
     subgraph browser[Browser Layer]
-        chromium[(Chromium Instance<br/>Browser Context<br/>staging site)]
+        chromium[(Chromium<br/>Browser Context<br/>staging site)]
     end
 
     yaml --> orchestrator
-    orchestrator --> pilot
+    orchestrator -->|no cache| pilot
+    orchestrator -->|cached| replay
+    pilot -->|save plan| planner
+    planner -->|load plan| replay
     state --> llm
     llm --> executor
     state --> chromium
     executor --> chromium
+    replay --> chromium
     chromium -->|page state| state
     orchestrator --> reporter
 ```
 
-The Pilot loop per step: capture page state (a11y tree + optional screenshot) → send to the LLM with the plain-English step → receive a structured action (`{ action: "click", ref: "e42" }`) → execute via Playwright → capture result.
+**Discovery run:** capture page state (a11y tree with stable refs) → LLM determines action → execute via Playwright → record for cache.
+
+**Cached run:** replay stored actions directly via Playwright — no LLM calls, no API costs.
 
 ## Documentation
 

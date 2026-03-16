@@ -221,7 +221,7 @@ describe("createLLMClient", () => {
 		const fetchCall = vi.mocked(fetch).mock.calls[0]
 		expect(fetchCall[0]).toBe("https://openrouter.ai/api/v1/chat/completions")
 
-		const requestInit = fetchCall[1] as RequestInit
+		const requestInit = fetchCall[1]!
 		expect(requestInit.method).toBe("POST")
 
 		const headers = requestInit.headers as Record<string, string>

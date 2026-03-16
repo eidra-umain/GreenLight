@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest"
+import type { Page } from "playwright"
 import {
 	launchBrowser,
 	createContext,
@@ -114,7 +115,7 @@ describe("executeAction with real browser", () => {
 	]
 
 	async function withPage(
-		fn: (page: import("playwright").Page) => Promise<void>,
+		fn: (page: Page) => Promise<void>,
 	) {
 		const browser = await launchBrowser({
 			headed: false,

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
+import type { Page } from "playwright"
 import {
 	launchBrowser,
 	createContext,
@@ -9,7 +10,7 @@ import { attachConsoleCollector } from "../../src/pilot/network.js"
 import { runTestCase } from "../../src/pilot/pilot.js"
 import type { LLMClient } from "../../src/pilot/llm.js"
 import type { PlannedStep } from "../../src/pilot/response-parser.js"
-import type { Action, PageState } from "../../src/reporter/types.js"
+import type { Action, ConsoleEntry, PageState } from "../../src/reporter/types.js"
 import { DEFAULTS } from "../../src/types.js"
 
 const html = `
@@ -27,23 +28,21 @@ function makeMockLLM(actions: Action[]): LLMClient {
 	let callIndex = 0
 	return {
 		resetHistory: vi.fn(),
-		planSteps: vi.fn(async (steps: string[]): Promise<PlannedStep[]> => {
+		planSteps: vi.fn((steps: string[]): Promise<PlannedStep[]> => {
 			// Mock planner returns null for all steps (runtime resolution)
-			return steps.map((s) => ({ step: s, action: null }))
+			return Promise.resolve(steps.map((s) => ({ step: s, action: null })))
 		}),
-		resolveStep: vi.fn(async (_step: string, _state: PageState) => {
+		resolveStep: vi.fn((_step: string, _state: PageState) => {
 			const action = actions[callIndex]
 			callIndex++
-			return action
+			return Promise.resolve(action)
 		}),
+		expandStep: vi.fn(() => Promise.resolve([])),
 	}
 }
 
 async function withPage(
-	fn: (
-		page: import("playwright").Page,
-		drain: () => import("../../src/reporter/types.js").ConsoleEntry[],
-	) => Promise<void>,
+	fn: (page: Page, drain: () => ConsoleEntry[]) => Promise<void>,
 ) {
 	const browser = await launchBrowser({
 		headed: false,
@@ -87,7 +86,7 @@ describe("runTestCase", () => {
 					],
 				},
 				llm,
-				{ timeout: 5000, consoleDrain: drain, debug: false },
+				{ timeout: 5000, consoleDrain: drain },
 			)
 
 			expect(result.status).toBe("passed")
@@ -111,7 +110,7 @@ describe("runTestCase", () => {
 					steps: ["click something bad", "click Greet"],
 				},
 				llm,
-				{ timeout: 5000, consoleDrain: drain, debug: false },
+				{ timeout: 5000, consoleDrain: drain },
 			)
 
 			expect(result.status).toBe("failed")
@@ -141,7 +140,7 @@ describe("runTestCase", () => {
 					steps: ['check that page contains "Nonexistent"'],
 				},
 				llm,
-				{ timeout: 5000, consoleDrain: drain, debug: false },
+				{ timeout: 5000, consoleDrain: drain },
 			)
 
 			expect(result.status).toBe("failed")
@@ -157,7 +156,7 @@ describe("runTestCase", () => {
 				page,
 				{ name: "Duration test", steps: ['click "Greet"'] },
 				llm,
-				{ timeout: 5000, consoleDrain: drain, debug: false },
+				{ timeout: 5000, consoleDrain: drain },
 			)
 
 			expect(result.duration).toBeGreaterThan(0)
@@ -173,7 +172,7 @@ describe("runTestCase", () => {
 				page,
 				{ name: "Screenshot test", steps: ['click "Greet"'] },
 				llm,
-				{ timeout: 5000, consoleDrain: drain, debug: false },
+				{ timeout: 5000, consoleDrain: drain },
 			)
 
 			expect(result.steps[0].screenshot).toBeDefined()
@@ -186,19 +185,20 @@ describe("runTestCase", () => {
 			const llm: LLMClient = {
 				resetHistory: vi.fn(),
 				planSteps: vi.fn(
-					async (steps: string[]): Promise<PlannedStep[]> =>
-						steps.map((s) => ({ step: s, action: null })),
+					(steps: string[]): Promise<PlannedStep[]> =>
+						Promise.resolve(steps.map((s) => ({ step: s, action: null }))),
 				),
-				resolveStep: vi.fn(async () => {
-					throw new Error("LLM API error 500: Internal Server Error")
+				resolveStep: vi.fn(() => {
+					return Promise.reject(new Error("LLM API error 500: Internal Server Error"))
 				}),
+				expandStep: vi.fn(() => Promise.resolve([])),
 			}
 
 			const result = await runTestCase(
 				page,
 				{ name: "LLM error test", steps: ["do something"] },
 				llm,
-				{ timeout: 5000, consoleDrain: drain, debug: false },
+				{ timeout: 5000, consoleDrain: drain },
 			)
 
 			expect(result.status).toBe("failed")

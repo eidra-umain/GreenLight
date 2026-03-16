@@ -12,7 +12,7 @@ export default tseslint.config(
   {
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        project: ["tsconfig.json", "tsconfig.test.json"],
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -23,6 +23,13 @@ export default tseslint.config(
       ],
       "@typescript-eslint/consistent-type-imports": "error",
       "@typescript-eslint/no-import-type-side-effects": "error",
+    },
+  },
+  {
+    files: ["tests/**/*.ts"],
+    rules: {
+      "@typescript-eslint/no-non-null-assertion": "off",
+      "@typescript-eslint/unbound-method": "off",
     },
   },
   prettier,
