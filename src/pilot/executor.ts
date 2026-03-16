@@ -248,13 +248,41 @@ async function extractCssSelector(
  * For text-based actions: extracts a CSS selector from the DOM element.
  */
 async function extractSelectorInfo(
+	page: Page,
 	action: Action,
 	a11yTree: A11yNode[],
 	locator: Locator,
 ): Promise<ResolvedSelector | undefined> {
 	if (action.ref) {
 		const node = findNodeByRef(a11yTree, action.ref)
-		if (node) return { role: node.role, name: node.name }
+		if (node) {
+			const selector: ResolvedSelector = { role: node.role, name: node.name }
+			// Check if multiple elements match this role+name.
+			// If so, record which one was acted on (nth index).
+			try {
+				type AriaRoleParam = Parameters<Page["getByRole"]>[0]
+				const allMatches = node.name
+					? page.getByRole(node.role as AriaRoleParam, { name: node.name })
+					: page.getByRole(node.role as AriaRoleParam)
+				const count = await allMatches.count()
+				if (count > 1) {
+					// Find which nth match our locator corresponds to
+					const targetEl = await locator.elementHandle()
+					for (let i = 0; i < count; i++) {
+						const matchEl = await allMatches.nth(i).elementHandle()
+						if (targetEl && matchEl && await targetEl.evaluate(
+							(a, b) => a === b, matchEl,
+						)) {
+							selector.nth = i
+							break
+						}
+					}
+				}
+			} catch {
+				// If counting fails, proceed without nth
+			}
+			return selector
+		}
 	}
 	if (action.text) {
 		const css = await extractCssSelector(locator)
@@ -414,6 +442,7 @@ export async function executeAction(
 			case "click": {
 				const locator = await resolveActionTarget(page, action, a11yTree)
 				resolvedSelector = await extractSelectorInfo(
+					page,
 					action,
 					a11yTree,
 					locator,
@@ -425,6 +454,7 @@ export async function executeAction(
 			case "check": {
 				const locator = await resolveActionTarget(page, action, a11yTree)
 				resolvedSelector = await extractSelectorInfo(
+					page,
 					action,
 					a11yTree,
 					locator,
@@ -436,6 +466,7 @@ export async function executeAction(
 			case "uncheck": {
 				const locator = await resolveActionTarget(page, action, a11yTree)
 				resolvedSelector = await extractSelectorInfo(
+					page,
 					action,
 					a11yTree,
 					locator,
@@ -450,6 +481,7 @@ export async function executeAction(
 				}
 				const locator = await resolveActionTarget(page, action, a11yTree)
 				resolvedSelector = await extractSelectorInfo(
+					page,
 					action,
 					a11yTree,
 					locator,
@@ -494,6 +526,7 @@ export async function executeAction(
 				}
 				const locator = await resolveActionTarget(page, action, a11yTree)
 				resolvedSelector = await extractSelectorInfo(
+					page,
 					action,
 					a11yTree,
 					locator,
@@ -508,6 +541,7 @@ export async function executeAction(
 				}
 				const locator = await resolveActionTarget(page, action, a11yTree)
 				resolvedSelector = await extractSelectorInfo(
+					page,
 					action,
 					a11yTree,
 					locator,
@@ -627,6 +661,7 @@ export async function executeAction(
 				if (action.ref) {
 					const locator = await resolveLocator(page, a11yTree, action.ref)
 					resolvedSelector = await extractSelectorInfo(
+						page,
 						action,
 						a11yTree,
 						locator,
@@ -735,6 +770,7 @@ async function executeAssertion(
 	const shouldPoll =
 		assertion.type === "contains_text" ||
 		assertion.type === "element_visible" ||
+		assertion.type === "element_exists" ||
 		assertion.type === "link_exists" ||
 		assertion.type === "field_exists"
 
@@ -781,7 +817,8 @@ function buildAssertionCheck(
 				break
 			}
 
-			case "element_visible": {
+			case "element_visible":
+			case "element_exists": {
 				const visible = await page.getByText(assertion.expected).isVisible()
 				if (!visible) {
 					throw new Error(

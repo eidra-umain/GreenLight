@@ -52,6 +52,10 @@ export function createPlanRecorder(
 				hStep.value = action.value
 			}
 
+			if (action.option !== undefined) {
+				hStep.option = action.option
+			}
+
 			if (action.assertion) {
 				hStep.assertion = { ...action.assertion }
 			}

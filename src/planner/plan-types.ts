@@ -12,6 +12,8 @@ export interface HeuristicSelector {
 	name?: string
 	/** CSS DOM selector extracted from the element (for text-based fallback resolution). */
 	css?: string
+	/** Zero-based index when multiple elements match the same role+name. */
+	nth?: number
 }
 
 /** A single concrete step in a heuristic plan. */
@@ -24,6 +26,8 @@ export interface HeuristicStep {
 	selector?: HeuristicSelector
 	/** Value: text to type, URL to navigate, key to press, scroll direction, etc. */
 	value?: string
+	/** For autocomplete actions: the specific suggestion to select. */
+	option?: string
 	/** Assertion details for assert actions. */
 	assertion?: { type: string; expected: string }
 	/** Page state after the step executed, for drift detection. */

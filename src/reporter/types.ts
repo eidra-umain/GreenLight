@@ -45,6 +45,8 @@ export interface ResolvedSelector {
 	name?: string
 	/** CSS DOM selector extracted from the element (for text-based fallback). */
 	css?: string
+	/** Zero-based index when multiple elements match the same role+name. */
+	nth?: number
 }
 
 /** Result of executing a single action in the browser. */
