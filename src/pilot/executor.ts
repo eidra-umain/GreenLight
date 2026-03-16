@@ -9,6 +9,7 @@ import type {
 	ExecutionResult,
 	ResolvedSelector,
 } from "../reporter/types.js"
+import { globals } from "../globals.js"
 
 /**
  * Find an A11yNode by its ref ID, searching the tree recursively.
@@ -291,6 +292,113 @@ export async function runWithNavigationHandling(
 }
 
 /**
+ * Check or uncheck a checkbox using multiple strategies.
+ * Modern frameworks (React, Vue, etc.) use synthetic event systems that
+ * don't respond to native DOM property changes. We try multiple approaches
+ * in order until the checkbox state actually changes.
+ */
+async function checkCheckbox(
+	page: Page,
+	locator: Locator,
+	checked: boolean,
+): Promise<void> {
+	const method = checked ? "check" : "uncheck"
+
+	// Strategy 1: Playwright's native check/uncheck (works for standard checkboxes)
+	try {
+		if (checked) {
+			await locator.check({ timeout: 3000 })
+		} else {
+			await locator.uncheck({ timeout: 3000 })
+		}
+		return
+	} catch {
+		if (globals.debug) {
+			console.log(`      [${method}] Playwright ${method}() timed out, trying label click`)
+		}
+	}
+
+	// Strategy 2: Find and click the associated <label> element.
+	// This is the most reliable approach for custom-styled checkboxes
+	// because it mimics what a real user does.
+	try {
+		const labelClicked = await locator.evaluate((el: HTMLElement) => {
+			// If this IS the input, find its label
+			let input: HTMLInputElement | null = null
+			if (el.tagName === "INPUT") {
+				input = el as HTMLInputElement
+			} else {
+				input = el.querySelector("input[type='checkbox']")
+			}
+			if (!input) return false
+
+			// Try label[for="id"]
+			if (input.id) {
+				const label = document.querySelector(`label[for="${input.id}"]`)
+				if (label) {
+					(label as HTMLElement).click()
+					return true
+				}
+			}
+			// Try wrapping <label>
+			const label = input.closest("label")
+			if (label) {
+				label.click()
+				return true
+			}
+			return false
+		})
+		if (labelClicked) {
+			if (globals.debug) {
+				console.log(`      [${method}] Label click succeeded`)
+			}
+			return
+		}
+	} catch {
+		// Continue to next strategy
+	}
+
+	// Strategy 3: Force click the element itself
+	try {
+		await locator.click({ force: true, timeout: 2000 })
+		if (globals.debug) {
+			console.log(`      [${method}] Force click succeeded`)
+		}
+		return
+	} catch {
+		if (globals.debug) {
+			console.log(`      [${method}] Force click failed, using JS property set + React workaround`)
+		}
+	}
+
+	// Strategy 4: Set the property and fire React-compatible events.
+	// React uses an internal event system that tracks the input's value
+	// via a property descriptor override. We need to use the native
+	// setter and then dispatch events to trigger React's onChange.
+	await locator.evaluate((el: HTMLElement, targetChecked: boolean) => {
+		const input = el.tagName === "INPUT" ? el as HTMLInputElement
+			: el.querySelector("input[type='checkbox']") as HTMLInputElement | null
+		if (!input) {
+			el.click()
+			return
+		}
+		// Use the native property setter to bypass React's override
+		const nativeSetter = Object.getOwnPropertyDescriptor(
+			HTMLInputElement.prototype, "checked"
+		)?.set
+		if (nativeSetter) {
+			nativeSetter.call(input, targetChecked)
+		} else {
+			input.checked = targetChecked
+		}
+		// Fire events that React's synthetic event system listens for
+		input.dispatchEvent(new Event("click", { bubbles: true }))
+		input.dispatchEvent(new Event("input", { bubbles: true }))
+		input.dispatchEvent(new Event("change", { bubbles: true }))
+	}, checked)
+}
+
+/**
  * Execute a single Action against the browser page.
  */
 export async function executeAction(
@@ -314,6 +422,28 @@ export async function executeAction(
 				break
 			}
 
+			case "check": {
+				const locator = await resolveActionTarget(page, action, a11yTree)
+				resolvedSelector = await extractSelectorInfo(
+					action,
+					a11yTree,
+					locator,
+				)
+				await checkCheckbox(page, locator, true)
+				break
+			}
+
+			case "uncheck": {
+				const locator = await resolveActionTarget(page, action, a11yTree)
+				resolvedSelector = await extractSelectorInfo(
+					action,
+					a11yTree,
+					locator,
+				)
+				await checkCheckbox(page, locator, false)
+				break
+			}
+
 			case "type": {
 				if (!action.value) {
 					throw new Error("type action requires a value")
@@ -324,11 +454,37 @@ export async function executeAction(
 					a11yTree,
 					locator,
 				)
-				// Use fill() to set the value atomically — avoids race conditions
-				// where overlay animations swallow the first keystrokes.
-				// fill() focuses the element, sets its value, and dispatches
-				// input/change events in a single operation.
-				await locator.fill(action.value)
+				// Click to focus, clear existing value, then type character by
+				// character. pressSequentially dispatches real keydown/keypress/
+				// keyup/input events per keystroke, which is required for
+				// frameworks that rely on JS input events (React onChange, custom
+				// validation, etc.). fill() bypasses these.
+				await locator.click()
+				await locator.fill("")
+				await locator.pressSequentially(action.value, { delay: 30 })
+
+				// Verify the value landed correctly. Async UI (search dropdowns,
+				// autocomplete overlays) can steal focus or trigger re-renders
+				// that swallow the last keystrokes. If the value drifted, re-focus
+				// and type the missing suffix.
+				const actual = await locator.inputValue().catch(() => "")
+				if (actual !== action.value) {
+					if (globals.debug) {
+						console.log(`      [type] Value drifted: got "${actual}", expected "${action.value}" — correcting`)
+					}
+					await locator.click()
+					if (action.value.startsWith(actual)) {
+						// Only the tail is missing — append it
+						await locator.pressSequentially(
+							action.value.slice(actual.length),
+							{ delay: 30 },
+						)
+					} else {
+						// Value is garbled — clear and retype
+						await locator.fill("")
+						await locator.pressSequentially(action.value, { delay: 30 })
+					}
+				}
 				break
 			}
 
@@ -343,6 +499,127 @@ export async function executeAction(
 					locator,
 				)
 				await locator.selectOption({ label: action.value })
+				break
+			}
+
+			case "autocomplete": {
+				if (!action.value) {
+					throw new Error("autocomplete action requires a value")
+				}
+				const locator = await resolveActionTarget(page, action, a11yTree)
+				resolvedSelector = await extractSelectorInfo(
+					action,
+					a11yTree,
+					locator,
+				)
+
+				if (globals.debug) {
+					console.log(`      [autocomplete] Typing "${action.value}" into field (target: ${action.ref ?? action.text ?? "unknown"})`)
+					if (action.option) {
+						console.log(`      [autocomplete] Will select specific option: "${action.option}"`)
+					} else {
+						console.log(`      [autocomplete] Will select first suggestion`)
+					}
+				}
+
+				// Click to focus, then type character by character to trigger autocomplete
+				await locator.click()
+				await locator.fill("")
+				await locator.pressSequentially(action.value, { delay: 50 })
+
+				if (globals.debug) {
+					console.log(`      [autocomplete] Typed "${action.value}", waiting for suggestions...`)
+				}
+
+				// Wait for autocomplete suggestions to appear.
+				// Try multiple common patterns: role=option, role=listbox children,
+				// generic dropdown/suggestion containers.
+				const suggestionPatterns = [
+					{ name: "role=option", locator: page.locator("[role='option']") },
+					{ name: "role=listbox children", locator: page.locator("[role='listbox'] > *") },
+					{ name: "CSS class patterns", locator: page.locator(".autocomplete-results > *, .suggestions > *, .dropdown-menu > *") },
+				]
+
+				let suggestions: import("playwright").Locator | undefined
+				let matchedPattern: string | undefined
+				for (const pattern of suggestionPatterns) {
+					try {
+						await pattern.locator.first().waitFor({ state: "visible", timeout: 5000 })
+						suggestions = pattern.locator
+						matchedPattern = pattern.name
+						break
+					} catch {
+						if (globals.debug) {
+							console.log(`      [autocomplete] Pattern "${pattern.name}" — no match`)
+						}
+					}
+				}
+
+				if (!suggestions) {
+					throw new Error(
+						"Autocomplete suggestions did not appear after typing",
+					)
+				}
+
+				const suggestionCount = await suggestions.count()
+				if (globals.debug) {
+					console.log(`      [autocomplete] Found ${String(suggestionCount)} suggestions via "${matchedPattern!}"`)
+					// Log first few suggestion texts
+					const previewCount = Math.min(suggestionCount, 5)
+					for (let i = 0; i < previewCount; i++) {
+						try {
+							const text = await suggestions.nth(i).textContent()
+							console.log(`      [autocomplete]   ${String(i + 1)}. ${text?.trim() ?? "(empty)"}`)
+						} catch { /* skip */ }
+					}
+					if (suggestionCount > 5) {
+						console.log(`      [autocomplete]   ... and ${String(suggestionCount - 5)} more`)
+					}
+				}
+
+				// Select the target option
+				if (action.option) {
+					// Find by matching text
+					const optionCandidates = [
+						{ name: "filter by hasText", locator: suggestions.filter({ hasText: action.option }).first() },
+						{ name: "getByRole option", locator: page.getByRole("option", { name: action.option }) },
+						{ name: "getByText exact", locator: page.getByText(action.option, { exact: true }) },
+						{ name: "getByText loose", locator: page.getByText(action.option) },
+					]
+					let clicked = false
+					for (const candidate of optionCandidates) {
+						try {
+							if (await candidate.locator.isVisible()) {
+								if (globals.debug) {
+									console.log(`      [autocomplete] Clicking option "${action.option}" via ${candidate.name}`)
+								}
+								await candidate.locator.click()
+								clicked = true
+								break
+							}
+						} catch {
+							if (globals.debug) {
+								console.log(`      [autocomplete] Option strategy "${candidate.name}" — no match`)
+							}
+						}
+					}
+					if (!clicked) {
+						throw new Error(
+							`Autocomplete option "${action.option}" not found in suggestions`,
+						)
+					}
+				} else {
+					// Click the first visible suggestion
+					if (globals.debug) {
+						const firstText = await suggestions.first().textContent()
+						console.log(`      [autocomplete] Clicking first suggestion: "${firstText?.trim() ?? "(empty)"}"`)
+					}
+					await suggestions.first().click()
+				}
+
+				if (globals.debug) {
+					console.log(`      [autocomplete] Done`)
+				}
 				break
 			}
 

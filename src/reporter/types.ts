@@ -115,6 +115,8 @@ export interface Action {
 	text?: string
 	/** Value to type, URL to navigate to, option to select, etc. */
 	value?: string
+	/** For autocomplete actions: the specific suggestion to select (defaults to first if omitted). */
+	option?: string
 	/** Assertion details for assert actions. */
 	assertion?: {
 		type: string

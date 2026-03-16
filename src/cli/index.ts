@@ -36,6 +36,7 @@ import {
 import { createPlanRecorder } from "../planner/plan-generator.js"
 import { runCachedPlan } from "../planner/plan-runner.js"
 import type { TestCaseResult } from "../reporter/types.js"
+import { initGlobals, globals } from "../globals.js"
 
 const program = new Command()
 
@@ -148,6 +149,12 @@ program
 				onDrift: parseOnDrift(opts.onDrift ?? DEFAULTS.onDrift),
 			}
 
+			// Initialize global runtime state (debug, trace)
+			initGlobals({
+				debug: opts.debug ?? false,
+				trace: createTraceLogger(opts.trace),
+			})
+
 			// Resolve glob patterns in suite file paths
 			const resolvedFiles = await resolveGlobs(config.suiteFiles)
 
@@ -222,7 +229,6 @@ program
 					process.exit(1)
 				}
 
-				const trace = createTraceLogger(opts.trace)
 				let hashIndexDirty = false
 
 				try {
@@ -268,10 +274,10 @@ program
 						const page = await createPage(context)
 						const { drain } = attachConsoleCollector(page)
 						const { waitForNetworkIdle } = attachNetworkTracker(page)
-						trace.attachToPage(page)
+						globals.trace.attachToPage(page)
 
 						try {
-							trace.log("goto", suite.base_url)
+							globals.trace.log("goto", suite.base_url)
 							await page.goto(suite.base_url)
 						} catch (err) {
 							const msg =
@@ -279,7 +285,7 @@ program
 							console.error(
 								`\n  \x1b[31m\u2717\x1b[0m Failed to navigate to ${suite.base_url}: ${msg}`,
 							)
-							trace.detachFromPage(page)
+							globals.trace.detachFromPage(page)
 							await context.close()
 							continue
 						}
@@ -301,7 +307,7 @@ program
 									`    \x1b[33mPlan drift detected, re-running with LLM\x1b[0m`,
 								)
 								// Close and re-create context for fresh state
-								trace.detachFromPage(page)
+								globals.trace.detachFromPage(page)
 								await context.close()
 
 								const ctx2 = await createContext(
@@ -313,7 +319,7 @@ program
 									attachConsoleCollector(page2)
 								const { waitForNetworkIdle: waitForNetworkIdle2 } =
 									attachNetworkTracker(page2)
-								trace.attachToPage(page2)
+								globals.trace.attachToPage(page2)
 								await page2.goto(suite.base_url)
 
 								const recorder = createPlanRecorder(
@@ -329,8 +335,6 @@ program
 									{
 										timeout: config.timeout,
 										consoleDrain: drain2,
-										debug: opts.debug,
-										trace,
 										recorder,
 										waitForNetworkIdle: waitForNetworkIdle2,
 									},
@@ -348,9 +352,9 @@ program
 									)
 								}
 
-								trace.detachFromPage(page2)
+								globals.trace.detachFromPage(page2)
 								await ctx2.close()
-								printStepResults(result, opts.debug)
+								printStepResults(result)
 								printTestSummary(result)
 								if (config.headed) {
 									await new Promise((r) =>
@@ -375,8 +379,6 @@ program
 								{
 									timeout: config.timeout,
 									consoleDrain: drain,
-									debug: opts.debug,
-									trace,
 									recorder,
 									waitForNetworkIdle,
 								},
@@ -396,14 +398,14 @@ program
 							}
 						}
 
-						printStepResults(result, opts.debug)
+						printStepResults(result)
 						printTestSummary(result)
 
 						if (config.headed) {
 							await new Promise((r) => setTimeout(r, 2000))
 						}
 
-						trace.detachFromPage(page)
+						globals.trace.detachFromPage(page)
 						await context.close()
 					}
 				} finally {
@@ -417,7 +419,7 @@ program
 	)
 
 /** Print step-by-step results for a test case. */
-function printStepResults(result: TestCaseResult, debug: boolean): void {
+function printStepResults(result: TestCaseResult): void {
 	for (const stepResult of result.steps) {
 		const icon =
 			stepResult.status === "passed"
@@ -432,7 +434,7 @@ function printStepResults(result: TestCaseResult, debug: boolean): void {
 		if (stepResult.error) {
 			console.log(`      \x1b[31m${stepResult.error}\x1b[0m`)
 		}
-		if (debug && stepResult.action) {
+		if (globals.debug && stepResult.action) {
 			console.log(`      Action: ${JSON.stringify(stepResult.action)}`)
 		}
 	}

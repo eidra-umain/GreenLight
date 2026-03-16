@@ -166,16 +166,42 @@ export async function capturePageState(
 
 // ── A11y snapshot parser ──────────────────────────────────────────────
 
-let refCounter = 0
+/**
+ * Stable ref assignment.
+ *
+ * Refs are derived from a structural path: each interactive element gets a
+ * ref based on its role, name, and sibling index among same-role siblings.
+ * This makes refs stable across captures — a button "Submit" keeps its ref
+ * even when new elements appear elsewhere in the tree.
+ *
+ * A short integer ref (e1, e2, ...) is assigned to each unique structural
+ * path via a persistent map that survives across captures within a test case.
+ * New elements get the next available integer. Removed elements keep their
+ * slot so that the LLM never sees a ref reassigned to a different element.
+ */
 
-/** Reset the ref counter (call between test cases). */
+/** Map from structural path → stable ref. Persists across captures within a test case. */
+let stableRefMap = new Map<string, string>()
+let nextRefId = 0
+
+/** Reset stable ref tracking (call between test cases). */
 export function resetRefCounter(): void {
-	refCounter = 0
+	stableRefMap = new Map<string, string>()
+	nextRefId = 0
 }
 
-function nextRef(): string {
-	refCounter++
-	return `e${String(refCounter)}`
+/**
+ * Get or assign a stable ref for a structural path.
+ * The path encodes the element's position: role, name, and sibling index
+ * at each level of the tree.
+ */
+function getStableRef(structuralPath: string): string {
+	const existing = stableRefMap.get(structuralPath)
+	if (existing) return existing
+	nextRefId++
+	const ref = `e${String(nextRefId)}`
+	stableRefMap.set(structuralPath, ref)
+	return ref
 }
 
 /**
@@ -215,11 +241,23 @@ interface ParsedLine {
 
 /**
  * Parse Playwright's ariaSnapshot YAML-like output into A11yNode tree with refs.
+ * Refs are stable across captures: the same element (identified by its
+ * structural path: role + name + sibling index at each tree level) always
+ * gets the same ref within a test case.
  */
 export function parseA11ySnapshot(raw: string): A11yNode[] {
 	const lines = raw.split("\n")
 	const rootNodes: A11yNode[] = []
-	const stack: { indent: number; node: A11yNode }[] = []
+	// Stack tracks: indent level, node, structural path prefix, and
+	// sibling counters (role → count) for assigning sibling indices.
+	const stack: {
+		indent: number
+		node: A11yNode
+		pathPrefix: string
+		siblingCounts: Map<string, number>
+	}[] = []
+	// Sibling counters at root level
+	let rootSiblingCounts = new Map<string, number>()
 
 	for (const line of lines) {
 		if (!line.trim()) continue
@@ -237,8 +275,6 @@ export function parseA11ySnapshot(raw: string): A11yNode[] {
 		const parsed = parseLine(line)
 		if (!parsed) continue
 
-		const node = buildNode(parsed)
-
 		// Find parent based on indent level
 		while (stack.length > 0) {
 			const top = stack.at(-1)
@@ -249,7 +285,21 @@ export function parseA11ySnapshot(raw: string): A11yNode[] {
 			}
 		}
 
+		// Compute structural path for stable ref assignment
 		const parent = stack.at(-1)
+		const siblingCounts = parent ? parent.siblingCounts : rootSiblingCounts
+		const pathPrefix = parent ? parent.pathPrefix : ""
+
+		// Sibling key: role + name (elements with the same role and name
+		// under the same parent get distinguished by index)
+		const siblingKey = `${parsed.role}:${parsed.name}`
+		const siblingIndex = siblingCounts.get(siblingKey) ?? 0
+		siblingCounts.set(siblingKey, siblingIndex + 1)
+
+		const structuralPath = `${pathPrefix}/${parsed.role}:${parsed.name}[${String(siblingIndex)}]`
+
+		const node = buildNode(parsed, structuralPath)
+
 		if (!parent) {
 			rootNodes.push(node)
 		} else {
@@ -257,7 +307,12 @@ export function parseA11ySnapshot(raw: string): A11yNode[] {
 			parent.node.children.push(node)
 		}
 
-		stack.push({ indent: parsed.indent, node })
+		stack.push({
+			indent: parsed.indent,
+			node,
+			pathPrefix: structuralPath,
+			siblingCounts: new Map<string, number>(),
+		})
 	}
 
 	return rootNodes
@@ -298,9 +353,9 @@ function parseLine(line: string): ParsedLine | null {
 	}
 }
 
-function buildNode(parsed: ParsedLine): A11yNode {
+function buildNode(parsed: ParsedLine, structuralPath: string): A11yNode {
 	const isInteractive = INTERACTIVE_ROLES.has(parsed.role)
-	const ref = isInteractive ? nextRef() : `_${parsed.role}`
+	const ref = isInteractive ? getStableRef(structuralPath) : `_${parsed.role}`
 
 	const node: A11yNode = {
 		ref,
@@ -316,6 +371,166 @@ function buildNode(parsed: ParsedLine): A11yNode {
 	}
 
 	return node
+}
+
+/** Metadata about a single form field, extracted from the DOM. */
+export interface FormFieldInfo {
+	/** The element ref from the a11y tree, if matched. */
+	ref?: string
+	/** The <label> text associated with this field. */
+	label?: string
+	/** The placeholder attribute value. */
+	placeholder?: string
+	/** The input type (text, email, tel, number, url, etc.). */
+	inputType: string
+	/** The tag name (input, textarea, select). */
+	tag: string
+	/** Whether the field is required. */
+	required: boolean
+	/** For select elements: the available option labels. */
+	options?: string[]
+	/** Whether this field is an autocomplete/typeahead/combobox that shows suggestions as you type. */
+	autocomplete?: boolean
+}
+
+/**
+ * Capture metadata about all visible form fields on the page.
+ * Extracts label, placeholder, input type, required status, and select options
+ * directly from the DOM — information not available in the a11y tree.
+ */
+export async function captureFormFields(page: Page): Promise<FormFieldInfo[]> {
+	return page.evaluate(() => {
+		const fields: {
+			label?: string
+			placeholder?: string
+			inputType: string
+			tag: string
+			required: boolean
+			options?: string[]
+			autocomplete?: boolean
+		}[] = []
+
+		const inputs = document.querySelectorAll(
+			"input, textarea, select",
+		) as NodeListOf<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+
+		for (const el of inputs) {
+			// Skip hidden inputs and submit buttons
+			if (el instanceof HTMLInputElement) {
+				if (el.type === "hidden" || el.type === "submit" || el.type === "button") continue
+			}
+
+			// Skip invisible elements
+			const style = window.getComputedStyle(el)
+			if (style.display === "none" || style.visibility === "hidden") continue
+
+			// Find label: explicit <label for="id">, wrapping <label>, or aria-label
+			let label: string | undefined
+			if (el.id) {
+				const labelEl = document.querySelector(`label[for="${el.id}"]`)
+				if (labelEl) label = labelEl.textContent?.trim()
+			}
+			if (!label && el.closest("label")) {
+				const labelEl = el.closest("label")!
+				// Get label text excluding the input's own text
+				const clone = labelEl.cloneNode(true) as HTMLElement
+				clone.querySelectorAll("input, textarea, select").forEach((c) => c.remove())
+				label = clone.textContent?.trim()
+			}
+			if (!label && el.getAttribute("aria-label")) {
+				label = el.getAttribute("aria-label")!
+			}
+			if (!label && el.getAttribute("aria-labelledby")) {
+				const labelledBy = document.getElementById(el.getAttribute("aria-labelledby")!)
+				if (labelledBy) label = labelledBy.textContent?.trim()
+			}
+
+			// Detect autocomplete/typeahead/combobox patterns
+			let autocomplete = false
+			const role = el.getAttribute("role")
+			const ariaAuto = el.getAttribute("aria-autocomplete")
+			const ariaExpanded = el.hasAttribute("aria-expanded")
+			const ariaOwns = el.getAttribute("aria-owns") || el.getAttribute("aria-controls")
+			const htmlAutocomplete = el.getAttribute("autocomplete")
+
+			// Explicit ARIA combobox or autocomplete
+			if (role === "combobox" || ariaAuto === "list" || ariaAuto === "both") {
+				autocomplete = true
+			}
+			// Has aria-expanded (toggle pattern) or aria-owns/controls a listbox
+			if (ariaExpanded && ariaOwns) {
+				autocomplete = true
+			}
+			// Parent or wrapper has combobox role
+			if (el.closest("[role='combobox']")) {
+				autocomplete = true
+			}
+			// Adjacent or nearby listbox/datalist
+			if (el.getAttribute("list")) {
+				autocomplete = true // HTML5 <datalist>
+			}
+			// Common CSS class patterns for autocomplete widgets
+			const classes = (el.className || "") + " " + (el.closest("[class]")?.className || "")
+			if (/autocomplete|typeahead|combobox|autosuggest|searchbox/i.test(classes)) {
+				autocomplete = true
+			}
+			// Browser autocomplete="off" often indicates a custom autocomplete widget
+			// (the site disables native autocomplete because it has its own)
+			if (htmlAutocomplete === "off" && el instanceof HTMLInputElement && el.type === "text") {
+				// Only flag as autocomplete if there are other hints (class patterns, nearby listboxes)
+				const parent = el.parentElement
+				if (parent && (parent.querySelector("[role='listbox'], [role='option'], .dropdown, .suggestions, .autocomplete-results") ||
+					/autocomplete|typeahead|combobox|autosuggest/i.test(parent.className || ""))) {
+					autocomplete = true
+				}
+			}
+
+			const field: typeof fields[number] = {
+				label: label || undefined,
+				placeholder: (el as HTMLInputElement).placeholder || undefined,
+				inputType: el instanceof HTMLSelectElement ? "select" : (el as HTMLInputElement).type || "text",
+				tag: el.tagName.toLowerCase(),
+				required: el.required || el.getAttribute("aria-required") === "true",
+			}
+
+			if (autocomplete) {
+				field.autocomplete = true
+			}
+
+			// Collect select options
+			if (el instanceof HTMLSelectElement) {
+				field.options = Array.from(el.options)
+					.filter((o) => o.value !== "")
+					.map((o) => o.text.trim())
+			}
+
+			fields.push(field)
+		}
+
+		return fields
+	})
+}
+
+/**
+ * Format form field metadata as readable text for LLM consumption.
+ */
+export function formatFormFields(fields: FormFieldInfo[]): string {
+	if (fields.length === 0) return "(no form fields found)"
+	return fields
+		.map((f, i) => {
+			const parts = [`${String(i + 1)}. <${f.tag}>`]
+			if (f.label) parts.push(`label="${f.label}"`)
+			if (f.placeholder) parts.push(`placeholder="${f.placeholder}"`)
+			parts.push(`type="${f.inputType}"`)
+			if (f.required) parts.push("[required]")
+			if (f.autocomplete) parts.push("[autocomplete]")
+			if (f.ref) parts.push(`ref=${f.ref}`)
+			if (f.options && f.options.length > 0) {
+				parts.push(`options: [${f.options.map((o) => `"${o}"`).join(", ")}]`)
+			}
+			return parts.join(" ")
+		})
+		.join("\n")
 }
 
 /**
