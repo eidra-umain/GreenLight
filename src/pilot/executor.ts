@@ -7,8 +7,10 @@ import type {
 	Action,
 	A11yNode,
 	ExecutionResult,
+	MapState,
 	ResolvedSelector,
 } from "../reporter/types.js"
+import type { MapAdapter } from "../map/types.js"
 import { globals } from "../globals.js"
 
 import {
@@ -87,6 +89,7 @@ export async function executeAction(
 	action: Action,
 	a11yTree: A11yNode[],
 	_valueStore?: Map<string, string>,
+	mapContext?: { state?: MapState; adapter?: MapAdapter },
 ): Promise<ExecutionResult> {
 	const start = performance.now()
 	let rememberedValue: string | undefined
@@ -495,6 +498,29 @@ export async function executeAction(
 						locator,
 					)
 					capturedText = (await locator.textContent() ?? "").trim()
+
+					// If the variable name or step implies we need a number but
+					// the captured text has none, the LLM likely picked the wrong
+					// element. Fall back to keyword search in the a11y tree.
+					const wantsNumber = /number|count|total|amount|qty|quantity|pris|antal|resultat/.test(
+						(action.rememberAs ?? "").toLowerCase(),
+					)
+					if (wantsNumber && !/\d/.test(capturedText)) {
+						if (globals.debug) {
+							console.log(`      [remember] Captured "${capturedText}" but expected a number — falling back to keyword search`)
+						}
+						const keywords = (action.rememberAs ?? "")
+							.replace(/_/g, " ")
+							.split(" ")
+							.filter((w) => w.length > 2)
+						const fallback = findValueInTree(a11yTree, keywords)
+						if (fallback) {
+							capturedText = fallback
+							if (globals.debug) {
+								console.log(`      [remember] Keyword search found: "${capturedText}"`)
+							}
+						}
+					}
 				} else {
 					// LLM didn't specify a target element. Search the a11y tree
 					// for nodes whose text contains a number and matches keywords
@@ -530,7 +556,7 @@ export async function executeAction(
 				if (!action.assertion) {
 					throw new Error("assert action requires an assertion")
 				}
-				await executeAssertion(page, action, a11yTree)
+				await executeAssertion(page, action, a11yTree, mapContext)
 				break
 			}
 

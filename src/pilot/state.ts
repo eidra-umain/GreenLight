@@ -9,6 +9,8 @@
 
 import type { Page } from "playwright"
 import type { ConsoleEntry, PageState } from "../reporter/types.js"
+import type { MapAdapter } from "../map/types.js"
+import { captureMapState } from "../map/index.js"
 import { parseA11ySnapshot } from "./a11y-parser.js"
 
 // ── Orchestrator ──────────────────────────────────────────────────────
@@ -21,7 +23,7 @@ import { parseA11ySnapshot } from "./a11y-parser.js"
 export async function capturePageState(
 	page: Page,
 	consoleDrain: () => ConsoleEntry[],
-	options?: { screenshot?: boolean },
+	options?: { screenshot?: boolean; mapAdapter?: MapAdapter },
 ): Promise<PageState> {
 	const takeScreenshot = options?.screenshot ?? false
 
@@ -73,5 +75,15 @@ export async function capturePageState(
 		: undefined
 	const consoleLogs = consoleDrain()
 
-	return { a11yTree, a11yRaw, visibleText, screenshot, url, title, consoleLogs }
+	// Capture map state if a map adapter is active
+	let mapState: PageState["mapState"]
+	if (options?.mapAdapter) {
+		try {
+			mapState = await captureMapState(page, options.mapAdapter)
+		} catch {
+			// Map may have been removed or navigated away — skip silently
+		}
+	}
+
+	return { a11yTree, a11yRaw, visibleText, screenshot, url, title, consoleLogs, mapState }
 }

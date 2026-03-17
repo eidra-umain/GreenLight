@@ -19,6 +19,8 @@ import { capturePageState } from "./state.js"
 import { resetRefCounter } from "./a11y-parser.js"
 import { executeAction } from "./executor.js"
 import type { PlanRecorder } from "../planner/plan-generator.js"
+import type { MapAdapter } from "../map/types.js"
+import { detectMap } from "../map/index.js"
 import { globals } from "../globals.js"
 
 export interface PilotOptions {
@@ -103,10 +105,64 @@ export async function runTestCase(
 	let queueIndex = 0
 	let failed = false
 
+	// Map adapter — set by MAP_DETECT, then passed to all subsequent state captures
+	let mapAdapter: MapAdapter | null = null
+	// Latest captured map state — passed to assertions
+	let latestMapState: import("../reporter/types.js").MapState | undefined
+
 	while (queueIndex < queue.length && !failed) {
 		const planned = queue[queueIndex]
 		queueIndex++
-		const { step, action: plannedAction, needsExpansion, rememberAs, compare: plannedCompare } = planned
+		const { step, action: plannedAction, needsExpansion, needsMapDetect, rememberAs, compare: plannedCompare } = planned
+
+		// ── MAP_DETECT: find and attach to a map instance ─────────────
+		if (needsMapDetect) {
+			trace.log("map:detect", step)
+			const stepStart = performance.now()
+			try {
+				if (options.waitForNetworkIdle) {
+					await options.waitForNetworkIdle()
+				}
+				mapAdapter = await detectMap(page)
+				if (!mapAdapter) {
+					stepResults.push({
+						step,
+						action: null,
+						status: "failed",
+						duration: performance.now() - stepStart,
+						error: "No supported map library detected on the page. Ensure the page contains a MapLibre GL, Mapbox GL, or Leaflet map.",
+					})
+					failed = true
+				} else {
+					trace.log("map:detected", mapAdapter.name)
+					// Record in heuristic plan so cached runs also detect the map
+					if (recorder) {
+						recorder.recordStep(
+							step,
+							{ action: "map_detect" },
+							{ success: true, duration: performance.now() - stepStart },
+							{ url: page.url(), title: await page.title() },
+						)
+					}
+					stepResults.push({
+						step,
+						action: null,
+						status: "passed",
+						duration: performance.now() - stepStart,
+					})
+				}
+			} catch (err) {
+				stepResults.push({
+					step,
+					action: null,
+					status: "failed",
+					duration: performance.now() - stepStart,
+					error: `Map detection failed: ${err instanceof Error ? err.message : String(err)}`,
+				})
+				failed = true
+			}
+			continue
+		}
 
 		// ── EXPAND: runtime step expansion (e.g. form filling) ────────
 		if (needsExpansion) {
@@ -119,7 +175,9 @@ export async function runTestCase(
 			if (options.waitForNetworkIdle) {
 				await options.waitForNetworkIdle()
 			}
-			const state = await capturePageState(page, options.consoleDrain)
+			const state = await capturePageState(page, options.consoleDrain, {
+				mapAdapter: mapAdapter ?? undefined,
+			})
 
 			try {
 				const t0 = performance.now()
@@ -176,7 +234,9 @@ export async function runTestCase(
 				}
 				trace.log("capture:start")
 				let t0 = performance.now()
-				const state = await capturePageState(page, options.consoleDrain)
+				const state = await capturePageState(page, options.consoleDrain, {
+					mapAdapter: mapAdapter ?? undefined,
+				})
 				timing.capture = performance.now() - t0
 				trace.log("capture:done", `${String(Math.round(timing.capture))}ms`)
 
@@ -190,6 +250,14 @@ export async function runTestCase(
 				)
 
 				a11yTree = state.a11yTree
+				if (state.mapState) latestMapState = state.mapState
+			}
+
+			// For map_state assertions on pre-planned actions (no state capture
+			// above), fetch fresh map state so the assertion has data to check.
+			if (action.assertion?.type === "map_state" && !latestMapState && mapAdapter) {
+				const { captureMapState: getMapState } = await import("../map/index.js")
+				latestMapState = await getMapState(page, mapAdapter)
 			}
 
 			// Propagate rememberAs from planned step to action
@@ -221,7 +289,10 @@ export async function runTestCase(
 			// Execute the action
 			trace.log("execute:start", action.action)
 			let t0 = performance.now()
-			const result = await executeAction(page, action, a11yTree)
+			const result = await executeAction(page, action, a11yTree, undefined, {
+				state: latestMapState,
+				adapter: mapAdapter ?? undefined,
+			})
 			timing.execute = performance.now() - t0
 			trace.log(
 				"execute:done",
@@ -254,11 +325,13 @@ export async function runTestCase(
 			try {
 				postState = await capturePageState(page, options.consoleDrain, {
 					screenshot: true,
+					mapAdapter: mapAdapter ?? undefined,
 				})
 			} catch {
 				await page.waitForLoadState("domcontentloaded")
 				postState = await capturePageState(page, options.consoleDrain, {
 					screenshot: true,
+					mapAdapter: mapAdapter ?? undefined,
 				})
 			}
 			timing.postCapture = performance.now() - t0
@@ -266,6 +339,7 @@ export async function runTestCase(
 				"postCapture:done",
 				`${String(Math.round(timing.postCapture))}ms`,
 			)
+			if (postState.mapState) latestMapState = postState.mapState
 
 			// Record step for heuristic plan if recorder is active
 			if (recorder) {

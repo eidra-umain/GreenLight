@@ -10,6 +10,8 @@ export interface PlannedStep {
 	action: Action | null
 	/** If true, this step needs runtime expansion into multiple sub-actions (e.g. form filling). */
 	needsExpansion?: boolean
+	/** If true, this step triggers map detection and attachment. */
+	needsMapDetect?: boolean
 	/** For REMEMBER steps: the variable name to store the captured value under. */
 	rememberAs?: string
 	/** For COMPARE steps: the comparison metadata (variable + operator). Resolved at runtime. */
@@ -106,6 +108,7 @@ function parsePlanAction(token: string): {
 	action: Action | null
 	description?: string
 	needsExpansion?: boolean
+	needsMapDetect?: boolean
 	rememberAs?: string
 	compare?: { variable: string; operator: string }
 } {
@@ -135,6 +138,11 @@ function parsePlanAction(token: string): {
 				operator: compareMatch[2],
 			},
 		}
+	}
+
+	// MAP_DETECT — detect and attach to a map instance
+	if (/^map_detect$/i.test(t)) {
+		return { action: null, description: "Detect map instance", needsMapDetect: true }
 	}
 
 	// EXPAND "description" — compound step needing runtime expansion
@@ -195,12 +203,13 @@ export function parsePlanResponse(raw: string): PlannedStep[] {
 		.split("\n")
 		.filter((l) => l.trim().length > 0)
 		.map((line) => {
-			const { action, description, needsExpansion, rememberAs, compare } = parsePlanAction(line)
+			const { action, description, needsExpansion, needsMapDetect, rememberAs, compare } = parsePlanAction(line)
 			const step = description ?? line.trim()
 			return {
 				step,
 				action,
 				...(needsExpansion ? { needsExpansion: true } : {}),
+				...(needsMapDetect ? { needsMapDetect: true } : {}),
 				...(rememberAs ? { rememberAs } : {}),
 				...(compare ? { compare } : {}),
 			}

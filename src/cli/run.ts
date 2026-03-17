@@ -1,6 +1,7 @@
 import { loadSuite } from "../parser/loader.js"
 import {
 	launchBrowser,
+	launchPersistentContextWithZoom,
 	createContext,
 	createPage,
 	closeBrowser,
@@ -186,11 +187,19 @@ export async function runCommand(
 			return llm
 		}
 
-		// Launch browser
+		// Launch browser — in headed mode use a persistent context with the
+		// zoom extension for real 75% browser zoom. In headless mode use the
+		// normal browser + context flow.
 		const browserOpts = toBrowserOptions(config)
-		let browser
+		let browser: Awaited<ReturnType<typeof launchBrowser>> | null = null
+		let persistentContext: Awaited<ReturnType<typeof launchPersistentContextWithZoom>>["context"] | null = null
 		try {
-			browser = await launchBrowser(browserOpts)
+			if (browserOpts.headed) {
+				const result = await launchPersistentContextWithZoom(browserOpts)
+				persistentContext = result.context
+			} else {
+				browser = await launchBrowser(browserOpts)
+			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			console.error(`\nFailed to launch browser: ${msg}`)
@@ -237,9 +246,9 @@ export async function runCommand(
 					)
 				}
 
-				// Fresh context per test case
-				const context = await createContext(browser, browserOpts)
-				const page = await createPage(context)
+				// Fresh context per test case (reuse persistent context in headed mode)
+				const context = persistentContext ?? await createContext(browser!, browserOpts)
+				const page = await createPage(context, { headed: browserOpts.headed })
 				const { drain } = attachConsoleCollector(page)
 				const { waitForNetworkIdle } = attachNetworkTracker(page)
 				globals.trace.attachToPage(page)
@@ -254,7 +263,12 @@ export async function runCommand(
 						`\n  \x1b[31m\u2717\x1b[0m Failed to navigate to ${suite.base_url}: ${msg}`,
 					)
 					globals.trace.detachFromPage(page)
+					if (persistentContext) {
+					// Persistent context is shared — close pages only
+					for (const p of context.pages()) await p.close().catch(() => {})
+				} else {
 					await context.close()
+				}
 					continue
 				}
 
@@ -276,13 +290,18 @@ export async function runCommand(
 						)
 						// Close and re-create context for fresh state
 						globals.trace.detachFromPage(page)
-						await context.close()
+						if (persistentContext) {
+					// Persistent context is shared — close pages only
+					for (const p of context.pages()) await p.close().catch(() => {})
+				} else {
+					await context.close()
+				}
 
-						const ctx2 = await createContext(
-							browser,
+						const ctx2 = persistentContext ?? await createContext(
+							browser!,
 							browserOpts,
 						)
-						const page2 = await createPage(ctx2)
+						const page2 = await createPage(ctx2, { headed: browserOpts.headed })
 						const { drain: drain2 } =
 							attachConsoleCollector(page2)
 						const { waitForNetworkIdle: waitForNetworkIdle2 } =
@@ -382,13 +401,18 @@ export async function runCommand(
 				}
 
 				globals.trace.detachFromPage(page)
-				await context.close()
+				if (persistentContext) {
+					// Persistent context is shared — close pages only
+					for (const p of context.pages()) await p.close().catch(() => {})
+				} else {
+					await context.close()
+				}
 			}
 		} finally {
 			if (hashIndexDirty) {
 				await saveHashIndex(cwd, hashIndex)
 			}
-			await closeBrowser(browser)
+			await closeBrowser(persistentContext ?? browser!)
 		}
 	}
 }

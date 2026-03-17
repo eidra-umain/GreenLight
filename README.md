@@ -34,7 +34,7 @@ tests:
       - check that you see "Thanks for your inquiry"
 ```
 
-GreenLight understands form wizards, custom dropdowns, autocomplete fields, and checkbox consent flows. It fills in forms with realistic test data, handles before/after value comparisons, and works with any UI framework.
+GreenLight understands form wizards, custom dropdowns, autocomplete fields, checkbox consent flows, and interactive maps. It fills in forms with realistic test data, handles before/after value comparisons, and works with any UI framework.
 
 The first run uses an LLM to discover the right actions (the **discovery run**). After that, GreenLight caches a concrete action plan and replays it without LLM calls — making subsequent runs fast and deterministic.
 
@@ -43,7 +43,7 @@ The first run uses an LLM to discover the right actions (the **discovery run**).
 1. Add GreenLight to your project:
 
 ```bash
-npm install greenlight
+npm install @eidra-umain/greenlight
 ```
 
 2. Create a `greenlight.yaml` in your project root:
@@ -185,6 +185,7 @@ Tests are plain English. The Pilot interprets intent, so phrasing is flexible. C
 | Remember | `remember the number of search results` |
 | Compare | `check that the number of results is less than before` |
 | Assert | `check that page contains "Order Confirmed"` |
+| Map assert | `check that the map shows "Stockholm"` or `check that zoom level is at least 10` |
 | Multi-step | `Select Red - Green - Blue in the color picker` (auto-split into 3 clicks) |
 
 ### Form filling
@@ -201,6 +202,31 @@ steps:
   - apply the "In Stock" filter
   - check that the total has decreased
 ```
+
+### Map testing
+
+GreenLight has built-in support for testing pages with interactive WebGL maps. When a test step mentions maps, markers, layers, or zoom levels, GreenLight automatically detects the map library, attaches to its instance, and queries the map's rendered features and viewport state directly — bypassing the DOM entirely, since WebGL canvas content is invisible to the accessibility tree.
+
+Currently supported: **MapLibre GL JS**. The architecture is pluggable — Mapbox GL and Leaflet adapters can be added without changing test syntax.
+
+```yaml
+steps:
+  - navigate to the map view
+  - check that the map shows "Stockholm"
+  - check that the zoom level is at least 10
+  - check that the "hospitals" layer is visible on the map
+```
+
+**How it works:** When the planner sees map-related language in a step, it inserts a `MAP_DETECT` step that finds and attaches to the map instance. Subsequent map assertions query the map's actual rendered features (place names, road labels, etc. from vector tile data) and viewport state (center, zoom, bounds, layers). This means "check that the map shows Stockholm" searches for a feature with `name: "Stockholm"` among the thousands of features currently rendered on the canvas — it doesn't just check for the word in the page text.
+
+**Map instance detection** works automatically for most setups:
+
+1. **React apps** (react-map-gl, etc.) — walks the React fiber tree from the `.maplibregl-map` container to find the map instance in component refs and hook state
+2. **Vue apps** — checks `__vue_app__` (Vue 3) and `__vue__` (Vue 2) component trees
+3. **Global variables** — scans `window.map`, `window.mapInstance`, and similar common names
+4. **Explicit exposure** — for maximum reliability, set `window.__greenlight_map = map` in your app
+
+Map detection, state capture, and feature queries all work in both discovery and cached plan runs.
 
 ### Reusable steps
 
@@ -325,7 +351,7 @@ greenlight run --provider openai --llm-base-url http://localhost:11434/v1 --mode
 | Layer | Technology |
 |-------|-----------|
 | Browser automation | Playwright (Chromium) |
-| Page representation | Accessibility tree with stable element refs |
+| Page representation | Accessibility tree with stable element refs + map viewport state |
 | AI | OpenRouter (any OpenAI-compatible provider) |
 | Plan caching | SHA-256 hash-based invalidation, `.greenlight/plans/` |
 | Test definitions | YAML |

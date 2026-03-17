@@ -31,12 +31,19 @@ Available actions:
 - assert: Check a condition on the page. Requires "assertion" with "type" and "expected".
   Assertion types: "contains_text", "not_contains_text", "url_contains", "element_visible", "element_not_visible", "element_exists", "link_exists", "field_exists".
   Special type "compare": requires additional "compare" field with "variable" (remembered name) and "operator" (less_than, greater_than, equal, not_equal, less_or_equal, greater_or_equal). The "expected" field describes what current value to read from the page. Use "ref" to target the element containing the current value.
+  Special type "map_state": asserts a condition about the map. Use ONLY when the step is about what the map shows, its zoom level, or its layers. The runtime queries the map's rendered features (place names, road names, etc.) and viewport state to evaluate the assertion. The "expected" field should describe the condition clearly:
+    - For locations/places: "map shows Örebro" or "map shows \"Örebro\"" — the runtime searches all rendered features for a name match.
+    - For zoom: "zoom level is at least 10"
+    - For layers: "layer hospitals is visible"
+  NEVER use "contains_text" for map-related assertions — the map is a WebGL canvas and its content is not in the DOM text.
 
 Element targeting:
 - Use "ref" when the target element appears in the accessibility tree (preferred).
 - Use "text" when the target is NOT in the accessibility tree but is visible on the page. The text value should match the visible text of the element you want to interact with. This is common when page markup lacks proper ARIA roles.
 - Never guess a ref. If the element you need is not in the tree, use "text" instead.
 - A "Visible page text" section shows what a human actually sees on the page. Use it to find elements that are missing from the accessibility tree — target them with "text" matching their visible label.
+
+Map state: When a map is detected on the page, an additional "Map state" section is included in the page state showing center coordinates, zoom level, bearing, pitch, bounds, and visible layers. For ANY step that refers to the map's geographic position, zoom, what area the map shows, or what location is visible on the map, you MUST use assertion type "map_state" — NEVER "contains_text". The map is a WebGL canvas; its rendered content (tiles, markers, labels) does NOT appear in the DOM text or accessibility tree.
 
 IMPORTANT: Any step that starts with "check that" is ALWAYS an assertion. Never return a click, type, or other interaction for a "check that" step.
 
@@ -56,6 +63,9 @@ Respond with ONLY a JSON object. No markdown, no explanation. Example responses:
 {"action":"remember","ref":"e15","rememberAs":"product_count"}
 {"action":"assert","assertion":{"type":"compare","expected":"product count"},"compare":{"variable":"product_count","operator":"less_than"},"ref":"e15"}
 {"action":"assert","assertion":{"type":"contains_text","expected":"Welcome back"}}
+{"action":"assert","assertion":{"type":"map_state","expected":"map shows \"Örebro\""}}
+{"action":"assert","assertion":{"type":"map_state","expected":"zoom level is at least 10"}}
+{"action":"assert","assertion":{"type":"map_state","expected":"map shows \"Stockholm\""}}
 {"action":"scroll","value":"down"}
 `
 
@@ -67,6 +77,7 @@ It has a list of test steps in natural language that you should convert into act
 
 Action syntax (one per line):
 - PAGE "description" — needs the live page to resolve (click, type, select interactions). The description should be a clear, atomic instruction.
+- MAP_DETECT — detect and attach to an interactive map on the page (MapLibre GL, Mapbox GL, Leaflet, etc.). This MUST appear before any map-related steps. It fails if no supported map is found. Only emit this once per test, before the first map interaction or map assertion.
 - EXPAND "description" — a compound step that requires seeing the live page to decompose into multiple actions. Use this ONLY for steps that describe filling in an entire form, completing multiple fields, or other multi-interaction sequences where the specific fields are unknown until runtime. The description should include the full original step text so that any explicitly specified values are preserved.
 - REMEMBER "what to capture from the page" as "variable_name" — captures a value from the page for later comparison. The description tells the runtime what to extract (e.g. "the number of products shown", "the total price", "the item count badge text"). The variable name is a short identifier.
 - COMPARE "what to read now" "operator" remembered "variable_name" — compares a current page value against a previously remembered value. Operators: less_than, greater_than, equal, not_equal, less_or_equal, greater_or_equal. The first description tells the runtime what current value to read.
@@ -124,6 +135,8 @@ Rules:
   Input: "verify the price didn't change" → COMPARE "the total price shown" "equal" remembered "total_price"
   Input: "remember the number of search results" → REMEMBER "the number of search results" as "search_result_count"
   Input: "check that the search results count has decreased" → COMPARE "the number of search results" "less_than" remembered "search_result_count"
+- MAP DETECTION: If ANY step in the test mentions a map, map markers, map layers, zooming/panning a map, map coordinates, geographic features on a map, or any other map-related interaction or assertion, you MUST emit a MAP_DETECT line BEFORE the first such step. This initializes map support for the test. Only emit MAP_DETECT once. Examples of map-related language: "map", "marker", "pin", "layer", "zoom level", "pan to", "coordinates", "center of the map", "map shows", "visible on the map".
+- MAP ASSERTIONS: Any assertion about what the map shows, displays, or contains (e.g. "check that the map shows X", "verify X is visible on the map") MUST be output as PAGE, NOT as a pre-resolved assert. The map is a WebGL canvas — its content is NOT in the DOM text. These assertions require the runtime to query the map's rendered features, which can only happen at execution time with live page state. NEVER use "assert contains_text" for map content.
 - No blank lines, no numbering, no explanation. Only action lines.
 `
 

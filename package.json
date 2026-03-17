@@ -1,7 +1,7 @@
 {
-  "name": "greenlight",
+  "name": "@eidra-umain/greenlight",
   "version": "0.1.0",
-  "description": "AI-driven E2E testing tool",
+  "description": "AI-driven E2E testing tool — write tests as plain English, no selectors or glue code",
   "license": "ISC",
   "author": "umain.com",
   "type": "module",
@@ -14,8 +14,24 @@
     "greenlight": "dist/cli/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
+  "keywords": [
+    "e2e",
+    "testing",
+    "ai",
+    "llm",
+    "playwright",
+    "natural-language",
+    "accessibility",
+    "automation",
+    "end-to-end"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eidra-umain/greenlight"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -24,6 +40,7 @@
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -31,6 +48,7 @@
     "commander": "^13.0.0",
     "dotenv": "^17.3.1",
     "playwright": "^1.58.2",
+    "playwright-zoom": "^1.1.0",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },

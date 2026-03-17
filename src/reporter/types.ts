@@ -13,6 +13,26 @@ export interface A11yNode {
 	raw: string
 }
 
+/** Snapshot of an interactive map's viewport state. */
+export interface MapState {
+	/** Which adapter produced this state (e.g. "maplibre", "leaflet", "mapbox"). */
+	adapter: string
+	/** Map center coordinate. */
+	center: { lng: number; lat: number }
+	/** Current zoom level. */
+	zoom: number
+	/** Camera bearing in degrees (0 = north). */
+	bearing: number
+	/** Camera pitch in degrees (0 = straight down). */
+	pitch: number
+	/** Visible bounds of the viewport. */
+	bounds: { sw: { lng: number; lat: number }; ne: { lng: number; lat: number } }
+	/** IDs of all layers in the current style. */
+	layers: string[]
+	/** Whether the map style is fully loaded. */
+	styleLoaded: boolean
+}
+
 /** Complete page state captured at a point in time. */
 export interface PageState {
 	/** Accessibility tree snapshot with element refs assigned. */
@@ -29,6 +49,8 @@ export interface PageState {
 	title: string
 	/** Console messages since last capture. */
 	consoleLogs: ConsoleEntry[]
+	/** Map viewport state, if a supported map library was detected. */
+	mapState?: MapState
 }
 
 /** A single browser console message. */

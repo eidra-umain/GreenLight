@@ -7,6 +7,22 @@ import { formatA11yTree } from "./a11y-parser.js"
 import { SYSTEM_PROMPT } from "./prompts.js"
 import type { ChatMessage } from "./providers/types.js"
 
+/** Format map state as a human-readable string for the LLM. */
+function formatMapState(mapState: PageState["mapState"]): string {
+	if (!mapState) return ""
+	const lines = [
+		`  Adapter: ${mapState.adapter}`,
+		`  Center: ${mapState.center.lng.toFixed(4)}, ${mapState.center.lat.toFixed(4)}`,
+		`  Zoom: ${mapState.zoom.toFixed(2)}`,
+		`  Bearing: ${mapState.bearing.toFixed(1)}°`,
+		`  Pitch: ${mapState.pitch.toFixed(1)}°`,
+		`  Bounds: SW(${mapState.bounds.sw.lng.toFixed(4)}, ${mapState.bounds.sw.lat.toFixed(4)}) — NE(${mapState.bounds.ne.lng.toFixed(4)}, ${mapState.bounds.ne.lat.toFixed(4)})`,
+		`  Style loaded: ${String(mapState.styleLoaded)}`,
+		`  Layers (${String(mapState.layers.length)}): ${mapState.layers.slice(0, 20).join(", ")}${mapState.layers.length > 20 ? ` ... and ${String(mapState.layers.length - 20)} more` : ""}`,
+	]
+	return lines.join("\n")
+}
+
 /** Build the user message containing the step and full page state. */
 export function buildUserMessage(step: string, pageState: PageState): string {
 	const tree = formatA11yTree(pageState.a11yTree)
@@ -20,6 +36,10 @@ export function buildUserMessage(step: string, pageState: PageState): string {
 
 	if (pageState.visibleText) {
 		parts.push("", "Visible page text:", pageState.visibleText)
+	}
+
+	if (pageState.mapState) {
+		parts.push("", "Map state:", formatMapState(pageState.mapState))
 	}
 
 	parts.push("", `Step to execute: ${step}`)

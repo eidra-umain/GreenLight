@@ -7,6 +7,8 @@
 import type { Page, Locator } from "playwright"
 import type { Action, StepResult, TestCaseResult } from "../reporter/types.js"
 import type { HeuristicPlan, HeuristicSelector, HeuristicStep } from "./plan-types.js"
+import type { MapAdapter } from "../map/types.js"
+import { detectMap, captureMapState } from "../map/index.js"
 import { executeAction, runWithNavigationHandling } from "../pilot/executor.js"
 import { checkCheckbox } from "../pilot/checkbox.js"
 import { globals } from "../globals.js"
@@ -40,6 +42,7 @@ function buildLocator(page: Page, selector: HeuristicSelector) {
 async function executeHeuristicStep(
 	page: Page,
 	step: HeuristicStep,
+	mapAdapter?: MapAdapter | null,
 ): Promise<{ success: boolean; duration: number; error?: string }> {
 	const start = performance.now()
 
@@ -241,6 +244,12 @@ async function executeHeuristicStep(
 				break
 			}
 
+			case "map_detect": {
+				// Map detection is handled by the caller (runCachedPlan).
+				// If we reach here, it means the caller already ran detection.
+				return { success: true, duration: performance.now() - start }
+			}
+
 			default: {
 				// navigate, press, wait, assert → delegate to regular executor
 				const action: Action = {
@@ -271,7 +280,16 @@ async function executeHeuristicStep(
 				if (step.rememberAs) {
 					action.rememberAs = step.rememberAs
 				}
-				const result = await executeAction(page, action, [])
+				// Pass map context for map_state assertions
+				const mapContext = mapAdapter
+					? { adapter: mapAdapter, state: undefined as any }
+					: undefined
+				if (mapContext && mapAdapter) {
+					try {
+						mapContext.state = await captureMapState(page, mapAdapter)
+					} catch { /* map may not be present for this step */ }
+				}
+				const result = await executeAction(page, action, [], undefined, mapContext)
 				return {
 					success: result.success,
 					duration: performance.now() - start,
@@ -315,6 +333,7 @@ export async function runCachedPlan(
 	const startTime = performance.now()
 	const stepResults: StepResult[] = []
 	let drifted = false
+	let mapAdapter: MapAdapter | null = null
 	globals.valueStore.clear()
 
 	for (const step of plan.steps) {
@@ -325,7 +344,42 @@ export async function runCachedPlan(
 			await options.waitForNetworkIdle()
 		}
 
-		const result = await executeHeuristicStep(page, step)
+		// Handle map detection step — find and attach to the map instance
+		if (step.action === "map_detect") {
+			try {
+				mapAdapter = await detectMap(page)
+				if (!mapAdapter) {
+					drifted = true
+					stepResults.push({
+						step: step.originalStep,
+						action: { action: "map_detect" },
+						status: "failed",
+						duration: performance.now() - stepStart,
+						error: "Plan drift: No supported map library detected on the page.",
+					})
+					break
+				}
+				stepResults.push({
+					step: step.originalStep,
+					action: { action: "map_detect" },
+					status: "passed",
+					duration: performance.now() - stepStart,
+				})
+				continue
+			} catch (err) {
+				drifted = true
+				stepResults.push({
+					step: step.originalStep,
+					action: { action: "map_detect" },
+					status: "failed",
+					duration: performance.now() - stepStart,
+					error: `Plan drift: ${err instanceof Error ? err.message : String(err)}`,
+				})
+				break
+			}
+		}
+
+		const result = await executeHeuristicStep(page, step, mapAdapter)
 
 		if (!result.success) {
 			drifted = true
