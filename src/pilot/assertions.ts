@@ -107,7 +107,37 @@ export async function executeCompareAssertion(
 		const locator = await resolveActionTarget(page, action, a11yTree)
 		currentText = (await locator.textContent() ?? "").trim()
 	} else {
-		throw new Error("compare assertion requires a ref or text to identify the current value element")
+		// No element target — use keyword search on the page (same approach
+		// as the remember fallback). Extract keywords from the variable name
+		// and find a matching text segment containing a number.
+		const keywords = variable
+			.replace(/_/g, " ")
+			.split(" ")
+			.filter((w) => w.length > 2)
+		const innerText = await page.locator("body").innerText()
+		const segments = innerText
+			.split(/[\n\t]+/)
+			.map((s) => s.trim())
+			.filter(Boolean)
+		let best = ""
+		for (const seg of segments) {
+			if (!/\d/.test(seg)) continue
+			const lower = seg.toLowerCase()
+			if (keywords.some((kw) => lower.includes(kw.toLowerCase()))) {
+				if (!best || seg.length < best.length) {
+					best = seg
+				}
+			}
+		}
+		if (!best) {
+			throw new Error(
+				`compare assertion: could not find a value on the page matching "${variable}"`,
+			)
+		}
+		currentText = best
+		if (globals.debug) {
+			console.log(`      [compare] Found current value by keyword search: "${currentText}"`)
+		}
 	}
 
 	const rememberedNum = extractNumber(rememberedText)

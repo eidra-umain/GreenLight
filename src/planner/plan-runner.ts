@@ -248,13 +248,17 @@ async function executeHeuristicStep(
 					value: step.value,
 					assertion: step.assertion,
 				}
-				// Pass through compare metadata and selector for compare asserts
+				// Compare asserts: override the assertion type so the executor
+				// performs a live numeric comparison instead of an exact text match.
+				// During discovery the LLM may have stored a contains_text with
+				// a hardcoded value (e.g. "42 resultat"), but the cached run
+				// must compare dynamically against the remembered value.
 				if (step.compare) {
 					action.compare = {
 						variable: step.compare.variable,
 						operator: step.compare.operator as Action["compare"] extends { operator: infer O } ? O : never,
 					}
-					action.assertion ??= { type: "compare", expected: step.originalStep }
+					action.assertion = { type: "compare", expected: step.originalStep }
 				}
 				if (step.selector) {
 					// For compare asserts that need an element ref to read current value

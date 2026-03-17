@@ -40,6 +40,8 @@ Element targeting:
 
 IMPORTANT: Any step that starts with "check that" is ALWAYS an assertion. Never return a click, type, or other interaction for a "check that" step.
 
+IMPORTANT: When the step description contains a word or phrase in quotes (e.g. the "resultat" count, the "Total" badge), the target element MUST contain that exact quoted text. Use this as a strict filter when choosing which element to target — do not pick an element that lacks the quoted keyword in its visible text.
+
 Respond with ONLY a JSON object. No markdown, no explanation. Example responses:
 
 {"action":"click","ref":"e5"}
@@ -85,7 +87,9 @@ Rules:
 - Assertions WITHOUT quoted strings describe something conceptual (e.g. "check that the page contains a Leads form", "check that there is a contact section"). These CANNOT be pre-resolved because the actual page text may differ from the description. Output PAGE with the full step as description so the runtime LLM can inspect the page.
 - For assertions that CAN be resolved, preserve the FULL expected text exactly as written. Never truncate or shorten it.
 - Steps that require seeing the page to identify interactive elements → PAGE with a description.
+- References to earlier steps: When a step uses pronouns or references like "that form", "the same page", "this dropdown", resolve them using context from earlier steps. Replace the reference with the concrete name from the earlier step. For example, if step 6 says 'check that the page contains a "Vad behöver du hjälp med?" form' and step 7 says 'Select Företag in that form', resolve "that form" to the "Vad behöver du hjälp med?" form.
 - IMPORTANT: Each output line must describe exactly ONE atomic interaction (one click, one type, one select). If an input step describes or implies multiple interactions — whether separated by dashes, commas, slashes, "then", "and", or simply listing several values/items/choices — split it into one PAGE line per interaction. Always err on the side of splitting: if a step could be multiple actions, it IS multiple actions.
+- When a step lists multiple values separated by dashes (e.g. "Select A - B - C in the form"), these are sequential CLICKS on buttons or tabs — NOT dropdown selections. Split into separate click steps. Use "click" in the description, not "select".
 - When splitting a step into multiple actions, PRESERVE the full original context in each sub-step description. The runtime LLM will see each sub-step independently without knowledge of the others, so each description must be self-contained and unambiguous. Include enough detail to identify the correct element (e.g. mention the form name, section, or UI context).
   For example:
   Input: "Select Category - Subcategory - Option in the filter form" → three lines:
@@ -96,6 +100,11 @@ Rules:
   PAGE "fill in the name field"
   PAGE "fill in the email field"
   PAGE "fill in the phone field"
+- EXCEPTION: Selecting a value from a dropdown or filter is ALWAYS a single PAGE step. Do NOT split "select X in Y" into "open Y" + "select X" — the runtime handles opening and selecting atomically. Example:
+  Input: "select Elektriker in Välj tjänst" → one line:
+  PAGE "select 'Elektriker' in 'Välj tjänst'"
+  Input: "choose Red from the color dropdown" → one line:
+  PAGE "select 'Red' from the color dropdown"
 - EXCEPTION: If a step describes filling in an entire form without listing specific fields
   (e.g. "fill in the form with some test data and submit it", "complete the contact form with email foo@bar.com"),
   use a single EXPAND line instead of splitting. EXPAND means the runtime will inspect the actual form fields on the page

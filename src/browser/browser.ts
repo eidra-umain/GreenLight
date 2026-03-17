@@ -18,19 +18,30 @@ export async function launchBrowser(config: BrowserOptions): Promise<Browser> {
 	})
 }
 
-/** Create an isolated browser context with configured viewport. */
+/** Create an isolated browser context with configured viewport and test mode headers. */
 export async function createContext(
 	browser: Browser,
 	config: BrowserOptions,
 ): Promise<BrowserContext> {
 	return browser.newContext({
 		viewport: config.viewport,
+		extraHTTPHeaders: {
+			"X-E2E-Test": "true",
+		},
 	})
 }
 
-/** Create a new page within a browser context. */
+/** Create a new page within a browser context and inject test mode global. */
 export async function createPage(context: BrowserContext): Promise<Page> {
-	return context.newPage()
+	const page = await context.newPage()
+	await page.addInitScript(() => {
+		Object.defineProperty(window, "__E2E_TEST__", {
+			value: true,
+			writable: false,
+			configurable: false,
+		})
+	})
+	return page
 }
 
 /** Close the browser and all its contexts. */
