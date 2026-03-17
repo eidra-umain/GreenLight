@@ -6,7 +6,7 @@
 
 Natural language driven end-to-end testing for web applications. Write tests as plain-English user stories, and an AI agent (the Pilot) executes them against your staging environment using a real browser.
 
-No selectors. No XPaths. No test IDs. Just describe what a user would do.
+No selectors. No XPaths. No test IDs, drivers or glue code. Just describe what a user would do.
 
 ## How it works
 
@@ -28,25 +28,9 @@ tests:
       - check that you see "Thanks for your inquiry"
 ```
 
-No selectors, no drivers or glue code. GreenLight understands form wizards, custom dropdowns, autocomplete fields, and checkbox consent flows. It fills in forms with realistic test data, handles before/after value comparisons, and works with any UI framework.
+GreenLight understands form wizards, custom dropdowns, autocomplete fields, and checkbox consent flows. It fills in forms with realistic test data, handles before/after value comparisons, and works with any UI framework.
 
-The first run uses an LLM to discover the right actions (the **discovery run**). After that, GreenLight caches a concrete action plan and replays it without LLM calls — making subsequent runs fast and free.
-
-```
-  Suite: Product Search
-  URL:   https://staging.example.com
-
-    Test: Filtering reduces results [cached]
-      ✓ navigate to Products from the main menu (0.8s)
-      ✓ remember the number of results shown (0.3s)
-      ✓ select "Electronics" in the category filter (1.1s)
-      ✓ check that the number of results has decreased (0.2s)
-      ✓ search for "wireless headphones" (0.9s)
-      ✓ check that the page contains "wireless" (0.1s)
-      ✓ fill in the inquiry form (3.2s)
-
-    PASSED [cached] (6.6s)
-```
+The first run uses an LLM to discover the right actions (the **discovery run**). After that, GreenLight caches a concrete action plan and replays it without LLM calls — making subsequent runs fast and deterministic.
 
 ## Quick start
 
