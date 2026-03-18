@@ -5,6 +5,8 @@
 
 import type { Action, ExecutionResult } from "../reporter/types.js"
 import type { HeuristicPlan, HeuristicStep } from "./plan-types.js"
+import type { Condition } from "../pilot/conditions.js"
+import type { PlannedStep } from "../pilot/response-parser.js"
 
 /** Records concrete actions during a discovery run. */
 export interface PlanRecorder {
@@ -14,6 +16,13 @@ export interface PlanRecorder {
 		action: Action,
 		result: ExecutionResult,
 		postState: { url: string; title: string },
+	): void
+	/** Record a conditional step evaluation. */
+	recordConditionalStep(
+		step: string,
+		condition: Condition,
+		conditionMet: boolean,
+		branch: PlannedStep[] | undefined,
 	): void
 	/** Produce the final heuristic plan from all recorded steps. */
 	finalize(): HeuristicPlan
@@ -68,6 +77,20 @@ export function createPlanRecorder(
 				hStep.assertion = { ...action.assertion }
 			}
 
+			steps.push(hStep)
+		},
+
+		recordConditionalStep(step, condition, conditionMet, _branch) {
+			const branchLabel = conditionMet ? "then" : (_branch ? "else" : "skipped")
+			const hStep: HeuristicStep = {
+				originalStep: step,
+				action: "conditional",
+				condition: { type: condition.type, target: condition.target },
+				discoveryBranch: branchLabel as "then" | "else" | "skipped",
+				postStepFingerprint: { url: "", title: "" },
+			}
+			// Note: the branch sub-steps will be recorded individually as they
+			// execute — they are spliced into the queue and go through recordStep().
 			steps.push(hStep)
 		},
 

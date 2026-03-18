@@ -12,6 +12,7 @@ import { detectMap, captureMapState } from "../map/index.js"
 import { executeAction, runWithNavigationHandling } from "../pilot/executor.js"
 import { checkCheckbox } from "../pilot/checkbox.js"
 import { extractQuotedText } from "../pilot/locator.js"
+import { evaluateCondition } from "../pilot/conditions.js"
 import { globals } from "../globals.js"
 
 type AriaRole = Parameters<Page["getByRole"]>[0]
@@ -370,12 +371,54 @@ export async function runCachedPlan(
 	let mapAdapter: MapAdapter | null = null
 	globals.valueStore.clear()
 
-	for (const step of plan.steps) {
+	const queue = [...plan.steps]
+	let queueIndex = 0
+
+	while (queueIndex < queue.length) {
+		const step = queue[queueIndex]
+		queueIndex++
 		const stepStart = performance.now()
 
 		// Wait for async content to settle before interacting
 		if (options?.waitForNetworkIdle) {
 			await options.waitForNetworkIdle()
+		}
+
+		// Handle conditional steps — evaluate condition and splice chosen branch
+		if (step.action === "conditional" && step.condition) {
+			const condition = {
+				type: step.condition.type as "visible" | "contains" | "url",
+				target: step.condition.target,
+			}
+			const conditionMet = await evaluateCondition(page, condition)
+			const branchLabel = conditionMet ? "then" : (step.elseSteps ? "else" : "skipped")
+
+			if (globals.debug) {
+				console.log(`      [cached:condition] ${condition.type} "${condition.target}": ${String(conditionMet)} → ${branchLabel}`)
+			}
+
+			// If the branch differs from discovery, mark as drifted
+			if (step.discoveryBranch && branchLabel !== step.discoveryBranch) {
+				drifted = true
+				recordStep({
+					step: step.originalStep,
+					action: null,
+					status: "failed",
+					duration: performance.now() - stepStart,
+					error: `Plan drift: condition "${condition.type} ${condition.target}" took ${branchLabel} branch, but discovery took ${step.discoveryBranch}`,
+					conditionResult: { met: conditionMet, branch: branchLabel as "then" | "else" | "skipped" },
+				})
+				break
+			}
+
+			recordStep({
+				step: step.originalStep,
+				action: null,
+				status: "passed",
+				duration: performance.now() - stepStart,
+				conditionResult: { met: conditionMet, branch: branchLabel as "then" | "else" | "skipped" },
+			})
+			continue
 		}
 
 		// Handle map detection step — find and attach to the map instance
@@ -486,7 +529,7 @@ export async function runCachedPlan(
 
 	const allPassed = stepResults.every((s) => s.status === "passed")
 	const status =
-		allPassed && stepResults.length === plan.steps.length
+		allPassed && queueIndex >= queue.length
 			? "passed"
 			: "failed"
 

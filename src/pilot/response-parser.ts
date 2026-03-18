@@ -3,6 +3,7 @@
  */
 
 import type { Action } from "../reporter/types.js"
+import type { Condition } from "./conditions.js"
 
 /** A single planned step: the display label and either a pre-resolved action or null. */
 export interface PlannedStep {
@@ -16,6 +17,12 @@ export interface PlannedStep {
 	rememberAs?: string
 	/** For COMPARE steps: the comparison metadata (variable + operator, or literal). Resolved at runtime. */
 	compare?: { variable: string; operator: string; literal?: string }
+	/** For conditional steps: the condition to evaluate at runtime. */
+	condition?: Condition
+	/** For conditional steps: the step(s) to execute if condition is true. */
+	thenBranch?: PlannedStep[]
+	/** For conditional steps: the step(s) to execute if condition is false (optional). */
+	elseBranch?: PlannedStep[]
 }
 
 /** Parse a JSON string from the LLM into a validated Action. */
@@ -112,8 +119,51 @@ function parsePlanAction(token: string): {
 	needsMapDetect?: boolean
 	rememberAs?: string
 	compare?: { variable: string; operator: string; literal?: string }
+	condition?: Condition
+	thenBranch?: PlannedStep[]
+	elseBranch?: PlannedStep[]
 } {
 	const t = token.trim()
+
+	// IF_VISIBLE / IF_CONTAINS / IF_URL — conditional steps
+	const conditionalMatch = /^IF_(VISIBLE|CONTAINS|URL)\s+"([^"]+)"\s+THEN\s+(.+?)(?:\s+ELSE\s+(.+))?$/i.exec(t)
+	if (conditionalMatch) {
+		const condType = conditionalMatch[1].toLowerCase() as "visible" | "contains" | "url"
+		const condTarget = conditionalMatch[2]
+		const thenToken = conditionalMatch[3].trim()
+		const elseToken = conditionalMatch[4]?.trim()
+
+		const thenParsed = parsePlanAction(thenToken)
+		const thenStep: PlannedStep = {
+			step: thenParsed.description ?? thenToken,
+			action: thenParsed.action,
+			...(thenParsed.needsExpansion ? { needsExpansion: true } : {}),
+			...(thenParsed.needsMapDetect ? { needsMapDetect: true } : {}),
+			...(thenParsed.rememberAs ? { rememberAs: thenParsed.rememberAs } : {}),
+			...(thenParsed.compare ? { compare: thenParsed.compare } : {}),
+		}
+
+		let elseBranch: PlannedStep[] | undefined
+		if (elseToken) {
+			const elseParsed = parsePlanAction(elseToken)
+			elseBranch = [{
+				step: elseParsed.description ?? elseToken,
+				action: elseParsed.action,
+				...(elseParsed.needsExpansion ? { needsExpansion: true } : {}),
+				...(elseParsed.needsMapDetect ? { needsMapDetect: true } : {}),
+				...(elseParsed.rememberAs ? { rememberAs: elseParsed.rememberAs } : {}),
+				...(elseParsed.compare ? { compare: elseParsed.compare } : {}),
+			}]
+		}
+
+		return {
+			action: null,
+			description: t,
+			condition: { type: condType, target: condTarget },
+			thenBranch: [thenStep],
+			elseBranch,
+		}
+	}
 
 	// REMEMBER "description" as "variable_name"
 	const rememberMatch = /^remember\s+"([^"]+)"\s+as\s+"([^"]+)"$/i.exec(t)
@@ -254,7 +304,7 @@ export function parsePlanResponse(raw: string): PlannedStep[] {
 		.split("\n")
 		.filter((l) => l.trim().length > 0)
 		.map((line) => {
-			const { action, description, needsExpansion, needsMapDetect, rememberAs, compare } = parsePlanAction(line)
+			const { action, description, needsExpansion, needsMapDetect, rememberAs, compare, condition, thenBranch, elseBranch } = parsePlanAction(line)
 			const step = description ?? line.trim()
 			return {
 				step,
@@ -263,6 +313,9 @@ export function parsePlanResponse(raw: string): PlannedStep[] {
 				...(needsMapDetect ? { needsMapDetect: true } : {}),
 				...(rememberAs ? { rememberAs } : {}),
 				...(compare ? { compare } : {}),
+				...(condition ? { condition } : {}),
+				...(thenBranch ? { thenBranch } : {}),
+				...(elseBranch ? { elseBranch } : {}),
 			}
 		})
 }

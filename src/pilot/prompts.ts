@@ -50,19 +50,32 @@ Respond with ONLY a JSON object. No markdown, no explanation.
 ═══ Page state ═══
 
 The page state may be provided in different levels of detail:
-- Full state: complete accessibility tree + visible page text (first step and after navigation).
+- Full state: complete accessibility tree with enrichment data (first step and after navigation).
 - Tree diff: only the added/removed lines from the accessibility tree (when a small part of the page changed, e.g. a form wizard step). Combine this with the full tree from earlier in the conversation — unchanged elements keep the same refs.
 - Unchanged: the page is identical to the previous step.
 
 Element refs (e1, e2, ...) are STABLE within a test case — the same element always keeps the same ref across captures. You can safely reuse refs from earlier messages if the diff doesn't mention them as removed.
 
+Each element in the tree may include enrichment properties indented below it:
+- "text": the visible text content (only shown when different from the element's a11y name)
+- "placeholder": the placeholder attribute (for inputs)
+- "value": the current input value or selected option
+
+Example:
+[e2] textbox "Enter visitor password"
+  placeholder: "Enter visitor password"
+[e3] button "Unlock"
+  text: "Unlock"
+[e14] textbox "Email Address"
+  value: "jane@example.com"
+
 ═══ Element targeting ═══
 
-- Use "ref" when the target element appears in the accessibility tree (preferred).
-- Use "text" when the target is NOT in the accessibility tree but is visible on the page. The text value should match the visible text of the element you want to interact with.
-- Never guess a ref. If the element you need is not in the tree, use "text" instead.
-- A "Visible page text" section shows what a human sees on the page. Use it to find elements missing from the accessibility tree.
-- When the step contains a word or phrase in quotes (e.g. the "resultat" count), the target element MUST contain that exact quoted text.
+- ALWAYS use "ref" to target elements. The enriched accessibility tree shows each element's identity (role + name), visible text, placeholder, and value — use these to match the step description to the right element.
+- Use "text" ONLY as a last resort when the element is genuinely not in the accessibility tree. This is rare.
+- Never guess a ref. If you cannot confidently identify the element in the tree, use "text".
+- Use enrichment data to match fuzzy descriptions: if the step says "password field", match it to a textbox with placeholder "Enter visitor password".
+- When the step contains a word or phrase in quotes (e.g. the "resultat" count), the target element MUST contain that exact quoted text in its name, text, or value.
 
 ═══ Interaction actions ═══
 
@@ -183,6 +196,22 @@ Rules:
 - REMEMBER/COMPARE: When a step says to save/note/remember a value → REMEMBER. When a later step compares against it → COMPARE. Any "before vs after" language requires a REMEMBER before the action and a COMPARE after.
 - MAP DETECTION: If ANY step mentions a map, markers, layers, zoom, pan, coordinates, or geographic features, emit MAP_DETECT before the first such step. Only emit it once.
 - MAP ASSERTIONS: Any assertion about map content must be PAGE (map is WebGL canvas, content not in DOM).
+- CONDITIONAL STEPS: When a step contains "if" + a condition + an action (or uses a suffix like "click X if visible"), emit a conditional line. The format is:
+  IF_VISIBLE "element text or description" THEN <action> [ELSE <action>]
+  IF_CONTAINS "text" THEN <action> [ELSE <action>]
+  IF_URL "path or text" THEN <action> [ELSE <action>]
+  The THEN and ELSE parts use the same action syntax as regular steps (PAGE, assert, navigate, etc.).
+  The ELSE part is optional — if omitted and the condition is false, the step is skipped.
+  When a conditional step implies multiple actions under the same condition, emit multiple IF_ lines with the EXACT SAME condition text. Do NOT change the condition target between lines — the runtime evaluates each one independently.
+  The condition target should use the exact text visible on the page when possible (button labels, link text, field placeholders). When the step describes a UI element generically (e.g. "a password field"), use the specific text that would appear on the page.
+  Examples:
+    "if 'Accept cookies' is visible, click it" → IF_VISIBLE "Accept cookies" THEN PAGE "click 'Accept cookies'"
+    "if the page shows 'Out of stock' then click 'Notify me' else click 'Add to cart'" → IF_CONTAINS "Out of stock" THEN PAGE "click 'Notify me'" ELSE PAGE "click 'Add to cart'"
+    "click 'Dismiss' if visible" → IF_VISIBLE "Dismiss" THEN PAGE "click 'Dismiss'"
+    "if url contains '/login' then check that page contains 'Sign in'" → IF_URL "/login" THEN assert contains_text "Sign in"
+    "if there is a password field, fill it with 'secret' and press unlock" →
+      IF_VISIBLE "password" THEN PAGE "type 'secret' into the password field"
+      IF_VISIBLE "password" THEN PAGE "click the unlock button"
 - No blank lines, no numbering, no explanation. Only action lines.
 
 Examples:

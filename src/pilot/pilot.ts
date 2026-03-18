@@ -220,6 +220,53 @@ export async function runTestCase(
 			continue
 		}
 
+		// ── CONDITIONAL: evaluate condition and splice chosen branch ──
+		if (planned.condition) {
+			trace.log("condition:eval", `${planned.condition.type} "${planned.condition.target}"`)
+			const stepStart = performance.now()
+
+			if (options.waitForNetworkIdle) {
+				await options.waitForNetworkIdle()
+			}
+
+			// Capture page state and let the LLM evaluate the condition
+			const state = await capturePageState(page, options.consoleDrain, {
+				mapAdapter: mapAdapter ?? undefined,
+			})
+			const conditionMet = await llm.evaluateCondition(
+				planned.condition.target,
+				planned.condition.type,
+				state,
+			)
+			trace.log("condition:result", String(conditionMet))
+
+			if (globals.debug) {
+				console.log(`      Condition ${planned.condition.type} "${planned.condition.target}": ${String(conditionMet)}`)
+			}
+
+			const branch = conditionMet ? planned.thenBranch : planned.elseBranch
+			const branchLabel = conditionMet ? "then" : (planned.elseBranch ? "else" : "skipped")
+
+			if (branch && branch.length > 0) {
+				// Splice the chosen branch into the queue at the current position
+				queue.splice(queueIndex, 0, ...branch)
+			}
+
+			// Record the conditional evaluation step
+			if (recorder) {
+				recorder.recordConditionalStep(step, planned.condition, conditionMet, branch)
+			}
+
+			recordStep({
+				step,
+				action: null,
+				status: "passed",
+				duration: performance.now() - stepStart,
+				conditionResult: { met: conditionMet, branch: branchLabel },
+			})
+			continue
+		}
+
 		// ── Normal step execution (same as before) ───────────────────
 		trace.log("step:start", step)
 		const stepStart = performance.now()

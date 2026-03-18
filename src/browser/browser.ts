@@ -13,8 +13,8 @@ export interface BrowserOptions {
 	viewport: { width: number; height: number }
 }
 
-/** Zoom level applied in headed mode (75%). */
-const BROWSER_ZOOM = 75
+/** Zoom level applied in headed mode (50%). */
+const BROWSER_ZOOM = 50
 
 /**
  * Resolve the path to the playwright-zoom extension directory.
@@ -26,16 +26,19 @@ function zoomExtensionPath(): string {
 	return path.join(pwZoomDir, "lib", "zoom-extension")
 }
 
+/** Common Chromium flags shared across launch modes. */
+const CHROMIUM_ARGS = [
+	"--enable-webgl",
+	"--enable-webgl2-compute-context",
+	"--enable-gpu-rasterization",
+	"--ignore-gpu-blocklist",
+]
+
 /** Launch a Chromium browser instance. */
 export async function launchBrowser(config: BrowserOptions): Promise<Browser> {
 	return chromium.launch({
 		headless: !config.headed,
-		args: [
-			"--enable-webgl",
-			"--enable-webgl2-compute-context",
-			"--enable-gpu-rasterization",
-			"--ignore-gpu-blocklist",
-		],
+		args: CHROMIUM_ARGS,
 	})
 }
 
@@ -72,14 +75,29 @@ export async function launchPersistentContextWithZoom(
 	config: BrowserOptions,
 ): Promise<{ context: BrowserContext }> {
 	const extPath = zoomExtensionPath()
-	const context = await chromium.launchPersistentContext("", {
+	// Set the window size to match the viewport so the browser chrome
+	// doesn't add extra space around the rendered page.
+	const { width, height } = config.viewport
+
+	// Create a temp user data dir with Chrome prefs that disable translate
+	const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs")
+	const { join } = await import("node:path")
+	const { tmpdir } = await import("node:os")
+	const userDataDir = mkdtempSync(join(tmpdir(), "greenlight-chrome-"))
+	const defaultDir = join(userDataDir, "Default")
+	mkdirSync(defaultDir, { recursive: true })
+	writeFileSync(
+		join(defaultDir, "Preferences"),
+		JSON.stringify({ translate: { enabled: false }, translate_blocked_languages: ["*"] }),
+	)
+
+	const context = await chromium.launchPersistentContext(userDataDir, {
 		headless: false,
 		viewport: config.viewport,
 		args: [
-			"--enable-webgl",
-			"--enable-webgl2-compute-context",
-			"--enable-gpu-rasterization",
-			"--ignore-gpu-blocklist",
+			...CHROMIUM_ARGS,
+			`--window-size=${String(width)},${String(height)}`,
+			"--disable-features=Translate,TranslateUI",
 			`--disable-extensions-except=${extPath}`,
 			`--load-extension=${extPath}`,
 		],
@@ -143,7 +161,29 @@ export async function createPage(
 
 /** Close a browser or persistent context. */
 export async function closeBrowser(browserOrContext: Browser | BrowserContext): Promise<void> {
-	await browserOrContext.close()
+	try {
+		if ("pages" in browserOrContext) {
+			// Persistent context (headed mode).
+			// Chrome 145 has a bug where its shutdown code crashes with SIGSEGV,
+			// triggering the macOS "quit unexpectedly" dialog. To avoid this,
+			// get the browser PID via CDP and SIGKILL it directly — the process
+			// never runs its buggy shutdown path.
+			const pages = browserOrContext.pages()
+			const page = pages[0] ?? await browserOrContext.newPage()
+			try {
+				const cdp = await browserOrContext.newCDPSession(page)
+				const info = await cdp.send("SystemInfo.getProcessInfo") as { processInfo: { type: string; id: number }[] }
+				const browserProc = info.processInfo.find((p) => p.type === "browser")
+				if (browserProc) {
+					process.kill(browserProc.id, "SIGKILL")
+					return
+				}
+			} catch { /* fall through to normal close */ }
+		}
+		await browserOrContext.close()
+	} catch {
+		// Browser process may have already exited
+	}
 }
 
 /** Extract browser options from RunConfig. */

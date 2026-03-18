@@ -43,8 +43,8 @@ export interface RunConfig {
 	provider: Provider
 	/** Base URL for the LLM API (optional override). */
 	llmBaseUrl?: string
-	/** Force a full discovery run, ignoring cached plans. */
-	discover: boolean
+	/** Force a full pilot (LLM) run, ignoring cached plans. */
+	pilot: boolean
 	/** Behavior on plan drift: "fail" (default) or "rerun" with LLM. */
 	onDrift: "fail" | "rerun"
 }
@@ -67,7 +67,7 @@ export const DEFAULTS: Pick<
 	| "viewport"
 	| "model"
 	| "provider"
-	| "discover"
+	| "pilot"
 	| "onDrift"
 > = {
 	reporter: "cli",
@@ -77,6 +77,6 @@ export const DEFAULTS: Pick<
 	viewport: { width: 1280, height: 720 },
 	model: "anthropic/claude-sonnet-4",
 	provider: "openrouter",
-	discover: false,
+	pilot: false,
 	onDrift: "fail",
 }

@@ -50,7 +50,7 @@ program
 		"log timestamped browser events for performance analysis",
 		false,
 	)
-	.option("--discover", "force full discovery run, ignore cached plans", false)
+	.option("--pilot", "force pilot (LLM) run, ignore cached plans", false)
 	.option(
 		"--on-drift <mode>",
 		'behavior on plan drift: "fail" or "rerun" (default: fail)',
@@ -77,7 +77,7 @@ program
 				deployment?: string
 				debug: boolean
 				trace: boolean
-				discover: boolean
+				pilot: boolean
 				onDrift?: string
 				planStatus: boolean
 			},
@@ -125,7 +125,7 @@ program
 				),
 				llmBaseUrl:
 					opts.llmBaseUrl ?? projectConfig?.llm_base_url,
-				discover: opts.discover,
+				pilot: opts.pilot,
 				onDrift: parseOnDrift(opts.onDrift ?? DEFAULTS.onDrift),
 			}
 

@@ -41,6 +41,12 @@ export interface LLMClient {
 	 * into multiple atomic actions. Returns a flat list of planned steps.
 	 */
 	planSteps(steps: string[]): Promise<PlannedStep[]>
+	/** Evaluate a condition against the live page state. Returns true/false. */
+	evaluateCondition(
+		condition: string,
+		conditionType: string,
+		pageState: PageState,
+	): Promise<boolean>
 	/** Resolve a single step using the page state and a11y tree. */
 	resolveStep(step: string, pageState: PageState): Promise<Action>
 	/**
@@ -71,10 +77,7 @@ export function resolveApiKey(): string {
 /** Resolve LLM client config from RunConfig and environment. */
 export function resolveLLMConfig(runConfig: RunConfig): LLMClientConfig {
 	const modelConfig = resolveModelConfig(runConfig.model)
-	const provider = createProvider(
-		runConfig.provider,
-		runConfig.llmBaseUrl,
-	)
+	const provider = createProvider(runConfig.provider, runConfig.llmBaseUrl)
 	return {
 		apiKey: resolveApiKey(),
 		provider,
@@ -95,10 +98,7 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 	let prevPageState: PageState | null = null
 	let prevFormattedTree = ""
 
-	async function chat(
-		messages: ChatMessage[],
-		model: string,
-	): Promise<string> {
+	async function chat(messages: ChatMessage[], model: string): Promise<string> {
 		return config.provider.chatCompletion(messages, {
 			apiKey: config.apiKey,
 			model,
@@ -128,6 +128,81 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 			return parsePlanResponse(content)
 		},
 
+		async evaluateCondition(
+			condition: string,
+			_conditionType: string,
+			pageState: PageState,
+		): Promise<boolean> {
+			// Frame condition as a regular assertion step so it participates
+			// in the same conversation (SYSTEM_PROMPT + history + compact diffs).
+			// The model returns JSON in its normal format; we interpret the
+			// assertion type to determine true/false.
+			const step = `check if there is a visible, prominent element matching "${condition}" on the page — a button, link, input, or heading that a user would see and interact with. Ignore hidden "skip to content" links and other accessibility-only elements. Partial name matching is OK (e.g. "password" matches "Enter visitor password"). If no such prominent element exists, respond with element_not_visible.`
+
+			let userMessage: string
+			let compactMode = "full"
+			if (prevPageState && history.length > 0) {
+				const compact = buildCompactMessage(
+					step,
+					pageState,
+					prevPageState,
+					prevFormattedTree,
+				)
+				if (compact) {
+					userMessage = compact.message
+					compactMode = compact.mode
+				} else {
+					userMessage = buildUserMessage(step, pageState)
+				}
+			} else {
+				userMessage = buildUserMessage(step, pageState)
+			}
+
+			if (globals.debug) {
+				console.log(`      [condition] Mode: ${compactMode} (${String(userMessage.length)} chars)`)
+				console.log(`      [condition] LLM input:\n${userMessage}`)
+			}
+
+			const messages: ChatMessage[] = [
+				{ role: "system", content: SYSTEM_PROMPT },
+				...history,
+				{ role: "user", content: userMessage },
+			]
+
+			const content = await chat(messages, config.pilotModel)
+
+			if (globals.debug) {
+				console.log(`      [condition] LLM response: ${content.trim()}`)
+			}
+
+			// Interpret the response: if the model returned a positive
+			// assertion (element_visible, element_exists, contains_text)
+			// or found a ref/text target, the condition is met.
+			let result = false
+			try {
+				const action = parseActionResponse(content)
+				if (action.assertion) {
+					const t = action.assertion.type
+					result = !t.startsWith("not_") && t !== "element_not_visible"
+				} else if (action.ref || action.text) {
+					// Model found an element to interact with → it exists
+					result = true
+				}
+			} catch {
+				// Parse failed — model couldn't make sense of condition → false
+			}
+
+			// Add to history and update state tracking
+			history.push(
+				{ role: "user", content: userMessage },
+				{ role: "assistant", content },
+			)
+			prevPageState = pageState
+			prevFormattedTree = formatA11yTree(pageState.a11yTree)
+
+			return result
+		},
+
 		async expandStep(
 			step: string,
 			pageState: PageState,
@@ -144,8 +219,7 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 				for (const f of formFields) {
 					const parts: string[] = [`        <${f.tag}>`]
 					if (f.label) parts.push(`label="${f.label}"`)
-					if (f.placeholder)
-						parts.push(`placeholder="${f.placeholder}"`)
+					if (f.placeholder) parts.push(`placeholder="${f.placeholder}"`)
 					parts.push(`type="${f.inputType}"`)
 					if (f.required) parts.push("[required]")
 					if (f.autocomplete) parts.push("[autocomplete]")
@@ -181,9 +255,7 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 			].join("\n")
 
 			if (globals.debug) {
-				console.log(
-					`      [expand] Sending expansion request to LLM...`,
-				)
+				console.log(`      [expand] Sending expansion request to LLM...`)
 			}
 
 			const content = await chat(
@@ -208,9 +280,7 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 					`      [expand] Parsed into ${String(expanded.length)} sub-steps:`,
 				)
 				for (const es of expanded) {
-					const label = es.action
-						? JSON.stringify(es.action)
-						: "(needs page)"
+					const label = es.action ? JSON.stringify(es.action) : "(needs page)"
 					console.log(`        - ${es.step} → ${label}`)
 				}
 			}
@@ -230,10 +300,7 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 			return expanded
 		},
 
-		async resolveStep(
-			step: string,
-			pageState: PageState,
-		): Promise<Action> {
+		async resolveStep(step: string, pageState: PageState): Promise<Action> {
 			// Check cache: same step on same page → same action
 			const cacheKey = `${step}\0${pageState.url}`
 			const cached = cache.get(cacheKey)

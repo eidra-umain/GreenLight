@@ -34,10 +34,6 @@ export function buildUserMessage(step: string, pageState: PageState): string {
 		tree,
 	]
 
-	if (pageState.visibleText) {
-		parts.push("", "Visible page text:", pageState.visibleText)
-	}
-
 	if (pageState.mapState) {
 		parts.push("", "Map state:", formatMapState(pageState.mapState))
 	}
@@ -73,7 +69,7 @@ export function computeTreeDiff(
  * Refs are stable across captures (derived from structural identity), so:
  * - If the a11y tree is identical: skip both tree and visible text ("unchanged").
  * - If < 30% of tree lines changed: send only the diff ("tree-diff").
- * - If >= 30% changed: send the full tree without visible text ("tree-only").
+ * - If >= 30% changed: send the full enriched tree ("tree-only").
  * Returns null if we should send full state instead (e.g. after navigation).
  */
 export function buildCompactMessage(
@@ -127,7 +123,7 @@ export function buildCompactMessage(
 		return { message: parts.join("\n"), mode: "tree-diff" }
 	}
 
-	// Large change — send full tree without visible text
+	// Large change — send full enriched tree
 	const parts = [
 		`Current URL: ${pageState.url}`,
 		`Page title: ${pageState.title}`,

@@ -44,7 +44,10 @@ function printStepResult(stepResult: StepResult): void {
 	const phases = t
 		? ` \x1b[90m[capture:${String(Math.round(t.capture))} llm:${String(Math.round(t.llm))} exec:${String(Math.round(t.execute))} post:${String(Math.round(t.postCapture))}ms]\x1b[0m`
 		: ""
-	console.log(`    ${icon} ${stepResult.step} (${dur})${phases}`)
+	const condTag = stepResult.conditionResult
+		? ` \x1b[90m[${stepResult.conditionResult.branch}]\x1b[0m`
+		: ""
+	console.log(`    ${icon} ${stepResult.step} (${dur})${phases}${condTag}`)
 	if (stepResult.error) {
 		console.log(`      \x1b[31m${stepResult.error}\x1b[0m`)
 	}
@@ -55,8 +58,7 @@ function printStepResult(stepResult: StepResult): void {
 
 /** Print pass/fail summary for a test case. */
 function printTestSummary(result: TestCaseResult): void {
-	const modeTag =
-		result.mode === "cached" ? " \x1b[36m[cached]\x1b[0m" : ""
+	const modeTag = result.mode === "cached" ? " \x1b[36m[cached]\x1b[0m" : ""
 	const testIcon =
 		result.status === "passed"
 			? "\x1b[32mPASSED\x1b[0m"
@@ -98,13 +100,9 @@ export async function showPlanStatus(
 			const cachedHash = hashIndex[hashKey]
 
 			if (!cachedHash) {
-				console.log(
-					`  ${hashKey}: \x1b[33mno cached plan\x1b[0m`,
-				)
+				console.log(`  ${hashKey}: \x1b[33mno cached plan\x1b[0m`)
 			} else if (cachedHash !== testHash) {
-				console.log(
-					`  ${hashKey}: \x1b[33mstale\x1b[0m (definition changed)`,
-				)
+				console.log(`  ${hashKey}: \x1b[33mstale\x1b[0m (definition changed)`)
 			} else {
 				const plan = await loadPlan(cwd, suiteSlug, testSlug)
 				if (plan) {
@@ -143,15 +141,14 @@ export async function runCommand(
 			process.exit(1)
 		}
 
-		// Resolve base URL: CLI flag > deployment/config > suite
-		const baseUrl = config.baseUrl ?? suite.base_url
+		// Resolve base URL: CLI flag > deployment config
+		const baseUrl = config.baseUrl
 		if (!baseUrl) {
 			console.error(
-				`No base_url for suite "${suite.suite}". Set it in the suite YAML, greenlight.yaml, or pass --base-url.`,
+				`No base_url for suite "${suite.suite}". Set it in greenlight.yaml or pass --base-url.`,
 			)
 			process.exit(1)
 		}
-		suite.base_url = baseUrl
 
 		// Apply suite-level model override
 		const effectiveModel = suite.model ?? config.model
@@ -164,34 +161,47 @@ export async function runCommand(
 		if (resolved.planner === resolved.pilot) {
 			console.log(`Model: ${resolved.planner}`)
 		} else {
-			console.log(
-				`Model: planner=${resolved.planner}, pilot=${resolved.pilot}`,
-			)
+			console.log(`Model: planner=${resolved.planner}, pilot=${resolved.pilot}`)
 		}
 
 		// Load hash index for plan caching
 		const hashIndex = await loadHashIndex(cwd)
 
-		// LLM client — created lazily, only when a test needs discovery
+		// LLM client — created lazily, only when a test needs pilot mode
 		let llm: LLMClient | undefined
 
 		function getOrCreateLLM(): LLMClient {
 			if (!llm) {
-				const llmConfig = resolveLLMConfig({
-					...config,
-					model: effectiveModel,
-				})
-				llm = createLLMClient(llmConfig)
+				try {
+					const llmConfig = resolveLLMConfig({
+						...config,
+						model: effectiveModel,
+					})
+					llm = createLLMClient(llmConfig)
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err)
+					console.error(`\n  \x1b[31m${msg}\x1b[0m`)
+					console.error(`  Set it in a .env file or export it in your shell:`)
+					console.error(`  $ export LLM_API_KEY=sk-...`)
+					process.exit(1)
+				}
 			}
 			return llm
 		}
 
 		// Launch browser — in headed mode use a persistent context with the
-		// zoom extension for real 75% browser zoom. In headless mode use the
+		// zoom extension for real 50% browser zoom. In headless mode use the
 		// normal browser + context flow.
-		const browserOpts = toBrowserOptions(config)
+		// Suite-level viewport overrides the project/default viewport.
+		const effectiveViewport = suite.viewport ?? config.viewport
+		const browserOpts = toBrowserOptions({
+			...config,
+			viewport: effectiveViewport,
+		})
 		let browser: Awaited<ReturnType<typeof launchBrowser>> | null = null
-		let persistentContext: Awaited<ReturnType<typeof launchPersistentContextWithZoom>>["context"] | null = null
+		let persistentContext:
+			| Awaited<ReturnType<typeof launchPersistentContextWithZoom>>["context"]
+			| null = null
 		try {
 			if (browserOpts.headed) {
 				const result = await launchPersistentContextWithZoom(browserOpts)
@@ -213,104 +223,141 @@ export async function runCommand(
 				? suite.tests.filter((t) => t.name === config.testFilter)
 				: suite.tests
 
-			for (const test of tests) { try {
-				const testSlug = slugify(test.name)
-				const testHash = computeTestHash(test)
-				const hashKey = `${suiteSlug}/${testSlug}`
-				const cachedHash = hashIndex[hashKey]
-
-				// Determine execution mode
-				let useCachedPlan = false
-				let cachedPlan = null
-
-				if (!config.discover && cachedHash === testHash) {
-					cachedPlan = await loadPlan(cwd, suiteSlug, testSlug)
-					if (cachedPlan) {
-						useCachedPlan = true
-					}
-				}
-
-				const modeLabel = useCachedPlan
-					? "\x1b[36mcached\x1b[0m"
-					: "\x1b[33mdiscovery\x1b[0m"
-				console.log(`\n  Test: ${test.name} [${modeLabel}]`)
-
-				if (
-					!config.discover &&
-					cachedHash &&
-					cachedHash !== testHash
-				) {
-					console.log(
-						`    \x1b[33mPlan stale, re-discovering\x1b[0m`,
-					)
-				}
-
-				// Fresh context per test case (reuse persistent context in headed mode)
-				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-				const context = persistentContext ?? await createContext(browser!, browserOpts)
-				const page = await createPage(context, { headed: browserOpts.headed })
-				const { drain } = attachConsoleCollector(page)
-				const { waitForNetworkIdle } = attachNetworkTracker(page)
-				globals.trace.attachToPage(page)
-
+			for (const test of tests) {
 				try {
-					globals.trace.log("goto", suite.base_url)
-					await page.goto(suite.base_url)
-				} catch (err) {
-					const msg =
-						err instanceof Error ? err.message : String(err)
-					console.error(
-						`\n  \x1b[31m\u2717\x1b[0m Failed to navigate to ${suite.base_url}: ${msg}`,
-					)
-					globals.trace.detachFromPage(page)
-					if (persistentContext) {
-					// Persistent context is shared — close pages only
-					for (const p of context.pages()) await p.close().catch(() => { /* ignore */ })
-				} else {
-					await context.close()
-				}
-					continue
-				}
+					const testSlug = slugify(test.name)
+					const testHash = computeTestHash(test)
+					const hashKey = `${suiteSlug}/${testSlug}`
+					const cachedHash = hashIndex[hashKey]
 
-				let result: TestCaseResult
+					// Determine execution mode
+					let useCachedPlan = false
+					let cachedPlan = null
 
-				if (useCachedPlan && cachedPlan) {
-					// Fast run — replay cached plan
-					result = await runCachedPlan(
-						page,
-						cachedPlan,
-						test.name,
-						{ waitForNetworkIdle, onStepComplete: printStepResult },
-					)
+					if (!config.pilot && cachedHash === testHash) {
+						cachedPlan = await loadPlan(cwd, suiteSlug, testSlug)
+						if (cachedPlan) {
+							useCachedPlan = true
+						}
+					}
 
-					// Handle plan drift
-					if (result.drifted && config.onDrift === "rerun") {
-						console.log(
-							`    \x1b[33mPlan drift detected, re-running with LLM\x1b[0m`,
+					const modeLabel = useCachedPlan
+						? "\x1b[36mcached\x1b[0m"
+						: "\x1b[33mpilot\x1b[0m"
+					console.log(`\n  Test: ${test.name} [${modeLabel}]`)
+
+					if (!config.pilot && cachedHash && cachedHash !== testHash) {
+						console.log(`    \x1b[33mPlan stale, running pilot\x1b[0m`)
+					}
+
+					// Fresh context per test case (reuse persistent context in headed mode)
+					// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+					const context =
+						persistentContext ?? (await createContext(browser!, browserOpts))
+					const page = await createPage(context, { headed: browserOpts.headed })
+					const { drain } = attachConsoleCollector(page)
+					const { waitForNetworkIdle } = attachNetworkTracker(page)
+					globals.trace.attachToPage(page)
+
+					try {
+						globals.trace.log("goto", baseUrl)
+						await page.goto(baseUrl)
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err)
+						console.error(
+							`\n  \x1b[31m\u2717\x1b[0m Failed to navigate to ${baseUrl}: ${msg}`,
 						)
-						// Close and re-create context for fresh state
 						globals.trace.detachFromPage(page)
 						if (persistentContext) {
-					// Persistent context is shared — close pages only
-					for (const p of context.pages()) await p.close().catch(() => { /* ignore */ })
-				} else {
-					await context.close()
-				}
+							// Persistent context is shared — close pages only
+							for (const p of context.pages()) await p.close().catch(() => {})
+						} else {
+							await context.close()
+						}
+						continue
+					}
 
-						const ctx2 = persistentContext ?? await createContext(
-							// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-							browser!,
-							browserOpts,
-						)
-						const page2 = await createPage(ctx2, { headed: browserOpts.headed })
-						const { drain: drain2 } =
-							attachConsoleCollector(page2)
-						const { waitForNetworkIdle: waitForNetworkIdle2 } =
-							attachNetworkTracker(page2)
-						globals.trace.attachToPage(page2)
-						await page2.goto(suite.base_url)
+					let result: TestCaseResult
 
-						const modelLabel =
+					if (useCachedPlan && cachedPlan) {
+						// Fast run — replay cached plan
+						result = await runCachedPlan(page, cachedPlan, test.name, {
+							waitForNetworkIdle,
+							onStepComplete: printStepResult,
+						})
+
+						// Handle plan drift
+						if (result.drifted && config.onDrift === "rerun") {
+							console.log(
+								`    \x1b[33mPlan drift detected, re-running with LLM\x1b[0m`,
+							)
+							// Close and re-create context for fresh state
+							globals.trace.detachFromPage(page)
+							if (persistentContext) {
+								// Persistent context is shared — close pages only
+								for (const p of context.pages())
+									await p.close().catch(() => {
+										/* ignore */
+									})
+							} else {
+								await context.close()
+							}
+
+							const ctx2 =
+								persistentContext ??
+								(await createContext(
+									// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+									browser!,
+									browserOpts,
+								))
+							const page2 = await createPage(ctx2, {
+								headed: browserOpts.headed,
+							})
+							const { drain: drain2 } = attachConsoleCollector(page2)
+							const { waitForNetworkIdle: waitForNetworkIdle2 } =
+								attachNetworkTracker(page2)
+							globals.trace.attachToPage(page2)
+							await page2.goto(baseUrl)
+
+							const modelLabel =
+								typeof effectiveModel === "string"
+									? effectiveModel
+									: `${effectiveModel.planner}/${effectiveModel.pilot}`
+							const recorder = createPlanRecorder(
+								suiteSlug,
+								testSlug,
+								testHash,
+								modelLabel,
+							)
+							result = await runTestCase(page2, test, getOrCreateLLM(), {
+								timeout: config.timeout,
+								consoleDrain: drain2,
+								recorder,
+								waitForNetworkIdle: waitForNetworkIdle2,
+								onStepComplete: printStepResult,
+							})
+							result.mode = "pilot"
+
+							if (result.status === "passed") {
+								const plan = recorder.finalize()
+								await savePlan(cwd, plan)
+								hashIndex[hashKey] = testHash
+								hashIndexDirty = true
+								await ensureGitignore(cwd)
+								console.log(`    \x1b[32mCached plan updated\x1b[0m`)
+							}
+
+							globals.trace.detachFromPage(page2)
+							await ctx2.close()
+							printTestSummary(result)
+							if (config.headed) {
+								await new Promise((r) => setTimeout(r, 2000))
+							}
+							continue
+						}
+					} else {
+						// Discovery run — full LLM loop with recorder
+						const discoveryModelLabel =
 							typeof effectiveModel === "string"
 								? effectiveModel
 								: `${effectiveModel.planner}/${effectiveModel.pilot}`
@@ -318,22 +365,19 @@ export async function runCommand(
 							suiteSlug,
 							testSlug,
 							testHash,
-							modelLabel,
+							discoveryModelLabel,
 						)
-						result = await runTestCase(
-							page2,
-							test,
-							getOrCreateLLM(),
-							{
-								timeout: config.timeout,
-								consoleDrain: drain2,
-								recorder,
-								waitForNetworkIdle: waitForNetworkIdle2,
-								onStepComplete: printStepResult,
-							},
-						)
-						result.mode = "discovery"
 
+						result = await runTestCase(page, test, getOrCreateLLM(), {
+							timeout: config.timeout,
+							consoleDrain: drain,
+							recorder,
+							waitForNetworkIdle,
+							onStepComplete: printStepResult,
+						})
+						result.mode = "pilot"
+
+						// Save plan only if the test passed
 						if (result.status === "passed") {
 							const plan = recorder.finalize()
 							await savePlan(cwd, plan)
@@ -341,81 +385,35 @@ export async function runCommand(
 							hashIndexDirty = true
 							await ensureGitignore(cwd)
 							console.log(
-								`    \x1b[32mCached plan updated\x1b[0m`,
+								`    \x1b[32mCached plan generated for: ${test.name}\x1b[0m`,
 							)
 						}
-
-						globals.trace.detachFromPage(page2)
-						await ctx2.close()
-						printTestSummary(result)
-						if (config.headed) {
-							await new Promise((r) =>
-								setTimeout(r, 2000),
-							)
-						}
-						continue
 					}
-				} else {
-					// Discovery run — full LLM loop with recorder
-					const discoveryModelLabel =
-						typeof effectiveModel === "string"
-							? effectiveModel
-							: `${effectiveModel.planner}/${effectiveModel.pilot}`
-					const recorder = createPlanRecorder(
-						suiteSlug,
-						testSlug,
-						testHash,
-						discoveryModelLabel,
-					)
 
-					result = await runTestCase(
-						page,
-						test,
-						getOrCreateLLM(),
-						{
-							timeout: config.timeout,
-							consoleDrain: drain,
-							recorder,
-							waitForNetworkIdle,
-							onStepComplete: printStepResult,
-						},
-					)
-					result.mode = "discovery"
+					printTestSummary(result)
 
-					// Save plan only if the test passed
-					if (result.status === "passed") {
-						const plan = recorder.finalize()
-						await savePlan(cwd, plan)
-						hashIndex[hashKey] = testHash
-						hashIndexDirty = true
-						await ensureGitignore(cwd)
-						console.log(
-							`    \x1b[32mCached plan generated for: ${test.name}\x1b[0m`,
+					if (config.headed) {
+						await new Promise((r) => setTimeout(r, 2000))
+					}
+
+					globals.trace.detachFromPage(page)
+					if (persistentContext) {
+						// Persistent context is shared — close pages only
+						for (const p of context.pages()) await p.close().catch(() => {})
+					} else {
+						await context.close()
+					}
+				} catch (err) {
+					if (err instanceof LLMApiError) {
+						console.error(
+							`\n  \x1b[31mLLM API returned ${String(err.status)} — aborting test run.\x1b[0m`,
 						)
+						console.error(`  ${err.message}\n`)
+						break
 					}
+					throw err
 				}
-
-				printTestSummary(result)
-
-				if (config.headed) {
-					await new Promise((r) => setTimeout(r, 2000))
-				}
-
-				globals.trace.detachFromPage(page)
-				if (persistentContext) {
-					// Persistent context is shared — close pages only
-					for (const p of context.pages()) await p.close().catch(() => { /* ignore */ })
-				} else {
-					await context.close()
-				}
-			} catch (err) {
-				if (err instanceof LLMApiError) {
-					console.error(`\n  \x1b[31mLLM API returned ${String(err.status)} — aborting test run.\x1b[0m`)
-					console.error(`  ${err.message}\n`)
-					break
-				}
-				throw err
-			} }
+			}
 		} finally {
 			if (hashIndexDirty) {
 				await saveHashIndex(cwd, hashIndex)

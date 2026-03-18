@@ -20,7 +20,7 @@ export interface HeuristicSelector {
 export interface HeuristicStep {
 	/** The original natural-language step text. */
 	originalStep: string
-	/** The action type (click, type, select, scroll, navigate, press, wait, assert). */
+	/** The action type (click, type, select, scroll, navigate, press, wait, assert, conditional). */
 	action: string
 	/** Element selector — undefined for actions without a target (navigate, press, assert, etc.). */
 	selector?: HeuristicSelector
@@ -34,6 +34,14 @@ export interface HeuristicStep {
 	assertion?: { type: string; expected: string }
 	/** For compare assertions: the comparison metadata. */
 	compare?: { variable: string; operator: string; literal?: string }
+	/** For conditional steps: the condition to evaluate at runtime. */
+	condition?: { type: string; target: string }
+	/** For conditional steps: concrete steps for the then branch. */
+	thenSteps?: HeuristicStep[]
+	/** For conditional steps: concrete steps for the else branch. */
+	elseSteps?: HeuristicStep[]
+	/** Which branch was taken during the discovery run (for drift detection). */
+	discoveryBranch?: "then" | "else" | "skipped"
 	/** Page state after the step executed, for drift detection. */
 	postStepFingerprint: {
 		url: string

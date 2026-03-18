@@ -10,7 +10,7 @@ No selectors. No XPaths. No test IDs, drivers or glue code. Just describe what a
 
 ---
 
-**[How it works](#how-it-works)** | **[Quick start](#quick-start)** | **[Project configuration](#project-configuration)** | **[CLI](#cli)** | **[Test syntax](#test-syntax)** | **[Cached plans](#cached-plans)** | **[LLM setup](#llm-setup)** | **[Architecture](#architecture)** | **[Avoiding side effects](#avoiding-side-effects-in-your-app)** | **[CI/CD](#cicd)**
+**[How it works](#how-it-works)** | **[Quick start](#quick-start)** | **[Project configuration](#project-configuration)** | **[CLI](#cli)** | **[Test syntax](#test-syntax)** | **[Writing test steps](#writing-test-steps)** | **[Cached plans](#cached-plans)** | **[LLM setup](#llm-setup)** | **[Architecture](#architecture)** | **[Avoiding side effects](#avoiding-side-effects-in-your-app)** | **[CI/CD](#cicd)**
 
 ---
 
@@ -18,7 +18,6 @@ No selectors. No XPaths. No test IDs, drivers or glue code. Just describe what a
 
 ```yaml
 suite: "Product Search"
-base_url: "https://staging.example.com"
 
 tests:
   - name: "Filtering reduces results"
@@ -119,7 +118,7 @@ If there are multiple deployments and no `default_deployment` is set, the `--dep
 | `suites` | string[] | Paths or globs to suite YAML files (required) |
 | `deployments` | map | Named deployment targets |
 | `default_deployment` | string | Which deployment to use by default |
-| `base_url` | string | Base URL for the site under test |
+| `base_url` | string | Base URL for the site under test (in deployments or top-level config) |
 | `model` | string | LLM model identifier |
 | `llm_base_url` | string | Base URL for the OpenAI-compatible API |
 | `timeout` | number | Per-step timeout in milliseconds |
@@ -147,9 +146,9 @@ greenlight run --model openai/gpt-4o    # override LLM model
 greenlight run --llm-base-url <url>     # use a different OpenAI-compatible API
 greenlight run --debug                  # verbose output (actions, LLM modes, timings)
 greenlight run --trace                  # timestamped browser events for perf analysis
-greenlight run --discover               # force discovery run, ignore cached plans
+greenlight run --pilot                  # force pilot (LLM) run, ignore cached plans
 greenlight run --plan-status            # show cache status for all tests
-greenlight run --on-drift rerun         # re-discover on cached plan drift (default: fail)
+greenlight run --on-drift rerun         # re-run with pilot on cached plan drift (default: fail)
 ```
 
 ## GreenLight philosophy compared to Gherkin/Cucumber
@@ -171,7 +170,7 @@ GreenLight takes a different approach:
 
 ## Test syntax
 
-Tests are plain English. The Pilot interprets intent, so phrasing is flexible. Common patterns:
+Tests are plain English. The Pilot interprets intent, so phrasing is flexible. Quick reference:
 
 | Action | Example |
 |--------|---------|
@@ -185,29 +184,178 @@ Tests are plain English. The Pilot interprets intent, so phrasing is flexible. C
 | Remember | `remember the number of search results` |
 | Compare | `check that the number of results is less than before` |
 | Assert | `check that page contains "Order Confirmed"` |
+| Conditional | `if "Accept cookies" is visible, click it` |
 | Map assert | `check that the map shows "Stockholm"` or `check that zoom level is at least 10` |
 | Multi-step | `Select Red - Green - Blue in the color picker` (auto-split into 3 clicks) |
 
+See **[Writing test steps](#writing-test-steps)** below for detailed guidance on each action type, including form filling, value comparisons, conditionals, map testing, and reusable steps.
+
+## Writing test steps
+
+This section covers how GreenLight interprets your plain-English steps, what happens behind the scenes, and how to write steps that work reliably.
+
+### How steps are processed
+
+When you write a step like `click the "Add to Cart" button`, GreenLight's **planner** (an LLM) converts it into a structured action before any browser interaction happens. Understanding this pipeline helps you write clearer steps:
+
+1. **Planning** — the LLM reads all your steps and classifies each one into an action type
+2. **Execution** — the pilot executes each action against the live browser page
+3. **Caching** — successful runs are saved so future runs skip the LLM entirely
+
+### Navigation
+
+Navigate to pages by URL or by describing what to click:
+
+```yaml
+steps:
+  - go to "/products"                        # direct URL navigation
+  - navigate to "https://example.com/about"  # full URL
+  - navigate to About from the main menu     # click a link (uses the live page)
+```
+
+**Tip:** Use quoted paths starting with `/` or `http` for direct navigation. For anything that requires finding and clicking a link, describe it naturally — GreenLight will resolve it against the live page.
+
+### Clicking and interacting
+
+```yaml
+steps:
+  - click "Add to Cart"                # click a button or link by text
+  - click the Submit button            # natural description
+  - press Enter                        # keyboard key
+  - scroll down                        # page scrolling
+```
+
+When you put text in quotes, GreenLight looks for an element with that exact text. Without quotes, it interprets the description more loosely against the accessibility tree.
+
+### Typing and form fields
+
+```yaml
+steps:
+  - enter "jane@example.com" into "Email"    # type into a specific field
+  - type "Stockholm" into the search field   # natural field description
+```
+
+GreenLight types character-by-character to trigger JavaScript event handlers (autocomplete, validation, etc.), just like a real user.
+
+### Dropdowns and selects
+
+```yaml
+steps:
+  - select "Canada" from "Country"           # works with native <select> and custom dropdowns
+```
+
+A single `select` step handles both opening the dropdown and choosing the option — don't split it into two steps.
+
+### Autocomplete fields
+
+```yaml
+steps:
+  - type "Stock" into the city field and select the first suggestion
+  - type "New" into the city field and select "New York"
+```
+
+GreenLight detects autocomplete fields and handles the type-wait-select flow automatically. Specify which suggestion to pick, or default to the first.
+
+### Checkboxes
+
+```yaml
+steps:
+  - check the "I agree to terms" checkbox
+  - uncheck the "Newsletter" checkbox
+```
+
+Use `check`/`uncheck` instead of `click` for checkboxes — this ensures correct toggle behavior for both native and custom checkbox implementations.
+
 ### Form filling
 
-Steps like "fill in the form with some test data and submit it" are automatically expanded at runtime. GreenLight inspects the actual form fields (labels, placeholders, input types) and generates appropriate test data. Autocomplete fields are detected and handled with type-wait-select flows. Consent checkboxes are automatically checked.
+For entire forms, describe what to fill and GreenLight inspects the actual form fields to generate appropriate test data:
 
-### Value comparisons
+```yaml
+steps:
+  - fill in the contact form with email "test@example.com" and some test data
+  - fill in the registration form and submit it
+```
+
+At runtime, GreenLight reads the form's field labels, placeholders, input types, and required status, then generates realistic data for each field. Explicitly mentioned values (like the email above) are used exactly. Autocomplete fields are detected and handled with type-wait-select flows. Consent checkboxes are automatically checked.
+
+### Multi-step interactions
+
+When a step describes multiple sequential actions, separate them with dashes:
+
+```yaml
+steps:
+  - Select Red - Green - Blue in the color picker   # three sequential clicks
+```
+
+Each value becomes a separate click action. Use this for tabs, radio cards, multi-select UIs — anything where you're clicking multiple items in sequence.
+
+### Assertions
+
+Any step starting with "check that" or "verify" is treated as an assertion — it validates page state without interacting:
+
+```yaml
+steps:
+  # Text presence (most common)
+  - check that the page contains "Order Confirmed"
+  - check that the page does not contain "Error"
+
+  # URL checks
+  - check that the URL contains "/success"
+
+  # Element visibility
+  - check that "Welcome back" is visible
+  - check that the error message is not visible
+
+  # Element state
+  - verify that the "Submit" button is disabled
+  - verify that the "Submit" button is enabled
+
+  # Numeric comparisons
+  - check that the count of products is greater than 0
+  - verify there are at least 5 results
+```
+
+**Important:** Assertions with quoted text (like `"Order Confirmed"`) are resolved at plan time — no LLM call needed at runtime. Assertions without quotes (like `check that the form is present`) require the live page to resolve.
+
+### Value comparisons (remember/compare)
 
 Remember a value before an action, then compare after:
 
 ```yaml
 steps:
-  - remember the total shown in the results badge
+  - remember the number of search results
   - apply the "In Stock" filter
-  - check that the total has decreased
+  - check that the number of results has decreased
 ```
+
+GreenLight captures the numeric value from the page, stores it, and compares it after the action. Supported operators: `increased`, `decreased`, `greater than`, `less than`, `equal to`, `at least`, `at most`.
+
+### Conditional steps
+
+Conditional steps let you handle pages that may look different between runs — cookie banners, feature flags, A/B tests, or optional UI elements.
+
+#### Inline conditionals
+
+Write the condition and action as a single step:
+
+```yaml
+steps:
+  - if "Accept cookies" is visible, click it
+  - click "Dismiss" if visible
+  - if the page shows "Out of stock" then click "Notify me" else click "Add to cart"
+  - if url contains "/login" then check that page contains "Sign in"
+```
+
+Supported conditions:
+- **Visibility:** `if "text" is visible`, `if the page shows "text"`
+- **Text presence:** `if page contains "text"`, `if the page shows "text"`
+- **URL:** `if url contains "/path"`
+
+If the condition is false and there's no `else`, the step is simply skipped (not failed). The test report shows which branch was taken: `[then]`, `[else]`, or `[skipped]`.
 
 ### Map testing
 
-GreenLight has built-in support for testing pages with interactive WebGL maps. When a test step mentions maps, markers, layers, or zoom levels, GreenLight automatically detects the map library, attaches to its instance, and queries the map's rendered features and viewport state directly — bypassing the DOM entirely, since WebGL canvas content is invisible to the accessibility tree.
-
-Currently supported: **MapLibre GL JS**. The architecture is pluggable — Mapbox GL and Leaflet adapters can be added without changing test syntax.
+GreenLight has built-in support for testing interactive WebGL maps. When a step mentions maps, markers, layers, or zoom levels, GreenLight detects the map library, attaches to its instance, and queries rendered features directly — bypassing the DOM (WebGL canvas content is invisible to the accessibility tree).
 
 ```yaml
 steps:
@@ -217,16 +365,16 @@ steps:
   - check that the "hospitals" layer is visible on the map
 ```
 
-**How it works:** When the planner sees map-related language in a step, it inserts a `MAP_DETECT` step that finds and attaches to the map instance. Subsequent map assertions query the map's actual rendered features (place names, road labels, etc. from vector tile data) and viewport state (center, zoom, bounds, layers). This means "check that the map shows Stockholm" searches for a feature with `name: "Stockholm"` among the thousands of features currently rendered on the canvas — it doesn't just check for the word in the page text.
+Currently supported: **MapLibre GL JS**. The architecture is pluggable — Mapbox GL and Leaflet adapters can be added.
+
+**How it works:** When a step mentions map-related content, GreenLight automatically inserts a map detection step. Map assertions query the actual rendered vector tile features (place names, road labels, etc.) and viewport state (center, zoom, bounds, layers) — not the DOM.
 
 **Map instance detection** works automatically for most setups:
 
-1. **React apps** (react-map-gl, etc.) — walks the React fiber tree from the `.maplibregl-map` container to find the map instance in component refs and hook state
-2. **Vue apps** — checks `__vue_app__` (Vue 3) and `__vue__` (Vue 2) component trees
-3. **Global variables** — scans `window.map`, `window.mapInstance`, and similar common names
-4. **Explicit exposure** — for maximum reliability, set `window.__greenlight_map = map` in your app
-
-Map detection, state capture, and feature queries all work in both discovery and cached plan runs.
+1. **React apps** (react-map-gl, etc.) — walks the React fiber tree
+2. **Vue apps** — checks `__vue_app__` / `__vue__` component trees
+3. **Global variables** — scans `window.map`, `window.mapInstance`, etc.
+4. **Explicit exposure** — set `window.__greenlight_map = map` for maximum reliability
 
 ### Reusable steps
 
@@ -247,6 +395,14 @@ tests:
       - check that page contains "Account Settings"
 ```
 
+### Tips for reliable tests
+
+- **Be specific with quotes** — `click "Submit"` is more reliable than `click the submit button` because it matches exact text.
+- **One action per step** — each step should describe one thing a user does. GreenLight splits compound steps, but explicit single-action steps are more predictable.
+- **Use assertions liberally** — after key actions, add a `check that` step to verify the expected outcome. This catches failures early and makes the test report more readable.
+- **Don't over-specify DOM structure** — say `click "Add to Cart"` not `click the button inside the product card div`. GreenLight uses the accessibility tree, not CSS selectors.
+- **Conditional steps for flaky UI** — if a cookie banner or popup sometimes appears, use `click "Accept" if visible` instead of making it a required step.
+
 ## Cached plans
 
 The first run of a test uses LLM calls to discover the right browser actions (**discovery run**). After a successful run, GreenLight caches the concrete action sequence as a **heuristic plan** in `.greenlight/plans/`.
@@ -255,7 +411,7 @@ Subsequent runs replay the cached plan directly via Playwright — no LLM calls,
 
 ```bash
 greenlight run                    # uses cached plans where available
-greenlight run --discover         # force fresh discovery, ignore cache
+greenlight run --pilot            # force pilot (LLM) run, ignore cache
 greenlight run --plan-status      # show which tests have cached plans
 ```
 

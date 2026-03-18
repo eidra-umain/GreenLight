@@ -11,6 +11,12 @@ export interface A11yNode {
 	url?: string
 	children?: A11yNode[]
 	raw: string
+	/** Visible innerText of this element (when different from the a11y name). */
+	visibleText?: string
+	/** Placeholder attribute value (for inputs). */
+	placeholder?: string
+	/** Current input value or selected option text. */
+	value?: string
 }
 
 /** Snapshot of an interactive map's viewport state. */
@@ -113,6 +119,11 @@ export interface StepResult {
 	screenshot?: string
 	/** Error message if the step failed. */
 	error?: string
+	/** For conditional steps: which branch was taken. */
+	conditionResult?: {
+		met: boolean
+		branch: "then" | "else" | "skipped"
+	}
 }
 
 /** Result of running a full test case (all steps). */
@@ -125,8 +136,8 @@ export interface TestCaseResult {
 	steps: StepResult[]
 	/** Total duration in ms. */
 	duration: number
-	/** Execution mode: "discovery" (LLM-driven) or "cached" (heuristic plan replay). */
-	mode?: "discovery" | "cached"
+	/** Execution mode: "pilot" (LLM-driven) or "cached" (heuristic plan replay). */
+	mode?: "pilot" | "cached"
 	/** Whether the cached plan drifted from the actual application state. */
 	drifted?: boolean
 }

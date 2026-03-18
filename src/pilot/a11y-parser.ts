@@ -217,7 +217,12 @@ function buildNode(parsed: ParsedLine, structuralPath: string, parentRole?: stri
 }
 
 /**
- * Format the a11y tree as a readable string with refs, for display and LLM consumption.
+ * Format the a11y tree as a readable string with refs and enrichment data,
+ * for display and LLM consumption.
+ *
+ * Enrichment sub-lines (text, placeholder, value) appear indented below
+ * each node, giving the LLM a single correlated view of each element's
+ * identity and content.
  */
 export function formatA11yTree(nodes: A11yNode[], indent = 0): string {
 	const lines: string[] = []
@@ -230,6 +235,20 @@ export function formatA11yTree(nodes: A11yNode[], indent = 0): string {
 		const urlStr = node.url ? ` → ${node.url}` : ""
 
 		lines.push(`${prefix}${refLabel}${node.role}${nameStr}${levelStr}${urlStr}`)
+
+		// Enrichment sub-lines (only for nodes with real refs)
+		if (!node.ref.startsWith("_")) {
+			const detailPrefix = prefix + "  "
+			if (node.visibleText) {
+				lines.push(`${detailPrefix}text: "${node.visibleText}"`)
+			}
+			if (node.placeholder) {
+				lines.push(`${detailPrefix}placeholder: "${node.placeholder}"`)
+			}
+			if (node.value) {
+				lines.push(`${detailPrefix}value: "${node.value}"`)
+			}
+		}
 
 		if (node.children) {
 			lines.push(formatA11yTree(node.children, indent + 1))
