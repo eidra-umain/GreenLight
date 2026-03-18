@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-03-18
+
+Unified page state, conditional steps, CLI and architecture improvements
+
+**Architecture**: Unified page state representation
+
+- Enriched a11y tree nodes with visible text, placeholder, and value from the DOM
+- LLM can now match fuzzy descriptions to elements (e.g. "password field" matches
+  textbox with placeholder "Enter visitor password")
+
+**Feature**: Conditional if/then/else steps
+
+- New IF_VISIBLE/IF_CONTAINS/IF_URL planner tokens for inline conditionals
+- Condition evaluation uses the pilot LLM via the same conversation flow as
+  resolveStep (shared history, compact diffs, JSON action response format)
+- Both branches cacheable in heuristic plans; drift detected on branch switch
+- CLI shows [then]/[else]/[skipped] tags on conditional step output
+- New conditions.ts module for code-based evaluation (used in cached plan replay)
+
+**Browser lifecycle fix**
+
+- Fixed Chromium crash dialog on macOS by SIGKILL via CDP SystemInfo.getProcessInfo
+  instead of Playwright's close() which triggers a SIGSEGV in Chrome 145 shutdown code
+
+**Documentation**
+
+- Added comprehensive "Writing test steps" section to README covering all action
+  types, enriched tree format, conditionals, form filling, assertions, map testing
+- Consolidated old "Test syntax" section into a quick-reference table
+
 ## [0.3.0] - 2026-03-18
 
 ### Added
