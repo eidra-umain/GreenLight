@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { parseActionResponse, parsePlanResponse, validatePlanReferences } from "../../src/pilot/response-parser.js"
+import { parseActionResponse, parsePlanResponse, validatePlanReferences, extractComparisonFromText } from "../../src/pilot/response-parser.js"
 import { buildCompactMessage } from "../../src/pilot/message-builder.js"
 import type { PageState } from "../../src/reporter/types.js"
 
@@ -97,6 +97,223 @@ describe("parsePlanResponse — mixed plan with REMEMBER/COMPARE", () => {
 	})
 })
 
+// ── parsePlanResponse: COMPARE_VALUE ─────────────────────────────────
+
+describe("parsePlanResponse — COMPARE_VALUE", () => {
+	it("parses a COMPARE_VALUE line with literal", () => {
+		const result = parsePlanResponse(
+			'COMPARE_VALUE "the count of products shown" "greater_than" "0"',
+		)
+		expect(result).toHaveLength(1)
+		expect(result[0].action).toBeNull()
+		expect(result[0].step).toBe("the count of products shown")
+		expect(result[0].compare).toEqual({
+			variable: "_",
+			operator: "greater_than",
+			literal: "0",
+		})
+	})
+
+	it("parses COMPARE_VALUE case-insensitively", () => {
+		const result = parsePlanResponse(
+			'compare_value "the number of items" "equal" "5"',
+		)
+		expect(result[0].compare).toEqual({
+			variable: "_",
+			operator: "equal",
+			literal: "5",
+		})
+	})
+
+	it("parses COMPARE_VALUE with all operators", () => {
+		const operators = [
+			"less_than",
+			"greater_than",
+			"equal",
+			"not_equal",
+			"less_or_equal",
+			"greater_or_equal",
+		]
+		for (const op of operators) {
+			const result = parsePlanResponse(
+				`COMPARE_VALUE "value" "${op}" "10"`,
+			)
+			expect(result[0].compare!.operator).toBe(op)
+			expect(result[0].compare!.literal).toBe("10")
+		}
+	})
+
+	it("works in a mixed plan without REMEMBER", () => {
+		const raw = [
+			'navigate "/products"',
+			'PAGE "wait for products to load"',
+			'COMPARE_VALUE "the count of products shown" "greater_than" "0"',
+		].join("\n")
+		const result = parsePlanResponse(raw)
+		expect(result).toHaveLength(3)
+		expect(result[2].compare!.literal).toBe("0")
+		expect(result[2].compare!.operator).toBe("greater_than")
+	})
+})
+
+// ── parsePlanResponse: assert numeric ────────────────────────────────
+
+describe("parsePlanResponse — assert numeric", () => {
+	it("parses assert numeric and extracts comparison from text", () => {
+		const result = parsePlanResponse(
+			'assert numeric "check that the count of products shown is greater than 0"',
+		)
+		expect(result).toHaveLength(1)
+		expect(result[0].action).toBeNull()
+		expect(result[0].compare).toEqual({
+			variable: "_",
+			operator: "greater_than",
+			literal: "0",
+		})
+	})
+
+	it("parses assert numeric with 'at least'", () => {
+		const result = parsePlanResponse(
+			'assert numeric "verify there are at least 5 results"',
+		)
+		expect(result[0].compare).toEqual({
+			variable: "_",
+			operator: "greater_or_equal",
+			literal: "5",
+		})
+	})
+
+	it("falls back to PAGE-like when no comparison found", () => {
+		const result = parsePlanResponse(
+			'assert numeric "check that products are displayed"',
+		)
+		expect(result[0].compare).toBeUndefined()
+		expect(result[0].action).toBeNull()
+	})
+
+	it("works in a mixed plan", () => {
+		const raw = [
+			'PAGE "click Köksblandare"',
+			'assert numeric "check that the count of products shown is greater than 0"',
+			'PAGE "click on the first product"',
+			'assert contains_text "Din varukorg är tom"',
+		].join("\n")
+		const result = parsePlanResponse(raw)
+		expect(result).toHaveLength(4)
+		expect(result[0].action).toBeNull() // PAGE
+		expect(result[1].compare!.operator).toBe("greater_than")
+		expect(result[1].compare!.literal).toBe("0")
+		expect(result[2].action).toBeNull() // PAGE
+		expect(result[3].action!.assertion!.type).toBe("contains_text")
+	})
+})
+
+// ── parsePlanResponse: COMPARE_VALUE simple syntax ───────────────────
+
+describe("parsePlanResponse — COMPARE_VALUE simple syntax", () => {
+	it("parses simple COMPARE_VALUE and extracts operator + literal from text", () => {
+		const result = parsePlanResponse(
+			'COMPARE_VALUE "check that the count of products shown is greater than 0"',
+		)
+		expect(result).toHaveLength(1)
+		expect(result[0].action).toBeNull()
+		expect(result[0].compare).toEqual({
+			variable: "_",
+			operator: "greater_than",
+			literal: "0",
+		})
+	})
+
+	it("extracts 'at least' as greater_or_equal", () => {
+		const result = parsePlanResponse(
+			'COMPARE_VALUE "verify there are at least 3 results"',
+		)
+		expect(result[0].compare).toEqual({
+			variable: "_",
+			operator: "greater_or_equal",
+			literal: "3",
+		})
+	})
+
+	it("extracts 'less than' operator", () => {
+		const result = parsePlanResponse(
+			'COMPARE_VALUE "check that the count is less than 10"',
+		)
+		expect(result[0].compare).toEqual({
+			variable: "_",
+			operator: "less_than",
+			literal: "10",
+		})
+	})
+
+	it("extracts 'equals' operator", () => {
+		const result = parsePlanResponse(
+			'COMPARE_VALUE "check that the number of items equals 5"',
+		)
+		expect(result[0].compare).toEqual({
+			variable: "_",
+			operator: "equal",
+			literal: "5",
+		})
+	})
+
+	it("falls back to PAGE-like step when no comparison found in text", () => {
+		const result = parsePlanResponse(
+			'COMPARE_VALUE "check that products are shown"',
+		)
+		expect(result[0].compare).toBeUndefined()
+		expect(result[0].action).toBeNull()
+	})
+})
+
+// ── extractComparisonFromText ────────────────────────────────────────
+
+describe("extractComparisonFromText", () => {
+	it("extracts 'greater than N'", () => {
+		expect(extractComparisonFromText("the count is greater than 0")).toEqual({ operator: "greater_than", literal: "0" })
+	})
+
+	it("extracts 'less than N'", () => {
+		expect(extractComparisonFromText("value is less than 100")).toEqual({ operator: "less_than", literal: "100" })
+	})
+
+	it("extracts 'at least N'", () => {
+		expect(extractComparisonFromText("at least 5 items")).toEqual({ operator: "greater_or_equal", literal: "5" })
+	})
+
+	it("extracts 'at most N'", () => {
+		expect(extractComparisonFromText("at most 20 results")).toEqual({ operator: "less_or_equal", literal: "20" })
+	})
+
+	it("extracts 'equals N'", () => {
+		expect(extractComparisonFromText("count equals 10")).toEqual({ operator: "equal", literal: "10" })
+	})
+
+	it("extracts 'equal to N'", () => {
+		expect(extractComparisonFromText("count is equal to 7")).toEqual({ operator: "equal", literal: "7" })
+	})
+
+	it("extracts 'more than N'", () => {
+		expect(extractComparisonFromText("more than 3 products")).toEqual({ operator: "greater_than", literal: "3" })
+	})
+
+	it("extracts 'fewer than N'", () => {
+		expect(extractComparisonFromText("fewer than 2 items")).toEqual({ operator: "less_than", literal: "2" })
+	})
+
+	it("extracts decimal numbers", () => {
+		expect(extractComparisonFromText("greater than 3.5")).toEqual({ operator: "greater_than", literal: "3.5" })
+	})
+
+	it("returns null when no comparison pattern found", () => {
+		expect(extractComparisonFromText("check that products are visible")).toBeNull()
+	})
+
+	it("returns null for empty string", () => {
+		expect(extractComparisonFromText("")).toBeNull()
+	})
+})
+
 // ── validatePlanReferences ───────────────────────────────────────────
 
 describe("validatePlanReferences", () => {
@@ -153,6 +370,23 @@ describe("validatePlanReferences", () => {
 		)
 		expect(validatePlanReferences(plan)).toEqual([])
 	})
+
+	it("returns no errors for COMPARE_VALUE (literal, no REMEMBER needed)", () => {
+		const plan = parsePlanResponse(
+			'COMPARE_VALUE "product count" "greater_than" "0"',
+		)
+		expect(validatePlanReferences(plan)).toEqual([])
+	})
+
+	it("handles mix of COMPARE and COMPARE_VALUE", () => {
+		const plan = parsePlanResponse([
+			'REMEMBER "count" as "before_count"',
+			'PAGE "apply filter"',
+			'COMPARE "count" "less_than" remembered "before_count"',
+			'COMPARE_VALUE "count" "greater_than" "0"',
+		].join("\n"))
+		expect(validatePlanReferences(plan)).toEqual([])
+	})
 })
 
 // ── parseActionResponse: remember and compare fields ─────────────────
@@ -197,6 +431,24 @@ describe("parseActionResponse — compare assertion", () => {
 			)
 			expect(action.compare!.operator).toBe(op)
 		}
+	})
+
+	it("parses a compare assertion with literal value", () => {
+		const action = parseActionResponse(
+			'{"action":"assert","ref":"e15","assertion":{"type":"compare","expected":"product count"},"compare":{"variable":"_","operator":"greater_than","literal":"0"}}',
+		)
+		expect(action.compare).toEqual({
+			variable: "_",
+			operator: "greater_than",
+			literal: "0",
+		})
+	})
+
+	it("does not set literal when not present in JSON", () => {
+		const action = parseActionResponse(
+			'{"action":"assert","assertion":{"type":"compare","expected":"x"},"compare":{"variable":"v","operator":"equal"}}',
+		)
+		expect(action.compare!.literal).toBeUndefined()
 	})
 })
 

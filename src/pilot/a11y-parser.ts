@@ -138,7 +138,7 @@ export function parseA11ySnapshot(raw: string): A11yNode[] {
 
 		const structuralPath = `${pathPrefix}/${parsed.role}:${parsed.name}[${String(siblingIndex)}]`
 
-		const node = buildNode(parsed, structuralPath)
+		const node = buildNode(parsed, structuralPath, parent?.node.role)
 
 		if (!parent) {
 			rootNodes.push(node)
@@ -193,8 +193,11 @@ function parseLine(line: string): ParsedLine | null {
 	}
 }
 
-function buildNode(parsed: ParsedLine, structuralPath: string): A11yNode {
+function buildNode(parsed: ParsedLine, structuralPath: string, parentRole?: string): A11yNode {
+	// A node is interactive if it has an interactive role, OR if it's a
+	// text node inside a radiogroup/listbox (custom radio cards, option lists).
 	const isInteractive = INTERACTIVE_ROLES.has(parsed.role)
+		|| (parsed.role === "text" && (parentRole === "radiogroup" || parentRole === "listbox"))
 	const ref = isInteractive ? getStableRef(structuralPath) : `_${parsed.role}`
 
 	const node: A11yNode = {

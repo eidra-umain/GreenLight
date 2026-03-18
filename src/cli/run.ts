@@ -27,31 +27,29 @@ import {
 } from "../planner/plan-store.js"
 import { createPlanRecorder } from "../planner/plan-generator.js"
 import { runCachedPlan } from "../planner/plan-runner.js"
-import type { TestCaseResult } from "../reporter/types.js"
+import type { StepResult, TestCaseResult } from "../reporter/types.js"
 import type { RunConfig } from "../types.js"
 import { resolveModelConfig } from "../types.js"
 import { globals } from "../globals.js"
 import { LLMApiError } from "../pilot/providers/index.js"
 
-/** Print step-by-step results for a test case. */
-function printStepResults(result: TestCaseResult): void {
-	for (const stepResult of result.steps) {
-		const icon =
-			stepResult.status === "passed"
-				? "\x1b[32m\u2713\x1b[0m"
-				: "\x1b[31m\u2717\x1b[0m"
-		const dur = `${String(Math.round(stepResult.duration))}ms`
-		const t = stepResult.timing
-		const phases = t
-			? ` \x1b[90m[capture:${String(Math.round(t.capture))} llm:${String(Math.round(t.llm))} exec:${String(Math.round(t.execute))} post:${String(Math.round(t.postCapture))}ms]\x1b[0m`
-			: ""
-		console.log(`    ${icon} ${stepResult.step} (${dur})${phases}`)
-		if (stepResult.error) {
-			console.log(`      \x1b[31m${stepResult.error}\x1b[0m`)
-		}
-		if (globals.debug && stepResult.action) {
-			console.log(`      Action: ${JSON.stringify(stepResult.action)}`)
-		}
+/** Print a single step result as it completes. */
+function printStepResult(stepResult: StepResult): void {
+	const icon =
+		stepResult.status === "passed"
+			? "\x1b[32m\u2713\x1b[0m"
+			: "\x1b[31m\u2717\x1b[0m"
+	const dur = `${String(Math.round(stepResult.duration))}ms`
+	const t = stepResult.timing
+	const phases = t
+		? ` \x1b[90m[capture:${String(Math.round(t.capture))} llm:${String(Math.round(t.llm))} exec:${String(Math.round(t.execute))} post:${String(Math.round(t.postCapture))}ms]\x1b[0m`
+		: ""
+	console.log(`    ${icon} ${stepResult.step} (${dur})${phases}`)
+	if (stepResult.error) {
+		console.log(`      \x1b[31m${stepResult.error}\x1b[0m`)
+	}
+	if (globals.debug && stepResult.action) {
+		console.log(`      Action: ${JSON.stringify(stepResult.action)}`)
 	}
 }
 
@@ -248,6 +246,7 @@ export async function runCommand(
 				}
 
 				// Fresh context per test case (reuse persistent context in headed mode)
+				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 				const context = persistentContext ?? await createContext(browser!, browserOpts)
 				const page = await createPage(context, { headed: browserOpts.headed })
 				const { drain } = attachConsoleCollector(page)
@@ -266,7 +265,7 @@ export async function runCommand(
 					globals.trace.detachFromPage(page)
 					if (persistentContext) {
 					// Persistent context is shared — close pages only
-					for (const p of context.pages()) await p.close().catch(() => {})
+					for (const p of context.pages()) await p.close().catch(() => { /* ignore */ })
 				} else {
 					await context.close()
 				}
@@ -281,7 +280,7 @@ export async function runCommand(
 						page,
 						cachedPlan,
 						test.name,
-						{ waitForNetworkIdle },
+						{ waitForNetworkIdle, onStepComplete: printStepResult },
 					)
 
 					// Handle plan drift
@@ -293,12 +292,13 @@ export async function runCommand(
 						globals.trace.detachFromPage(page)
 						if (persistentContext) {
 					// Persistent context is shared — close pages only
-					for (const p of context.pages()) await p.close().catch(() => {})
+					for (const p of context.pages()) await p.close().catch(() => { /* ignore */ })
 				} else {
 					await context.close()
 				}
 
 						const ctx2 = persistentContext ?? await createContext(
+							// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 							browser!,
 							browserOpts,
 						)
@@ -329,6 +329,7 @@ export async function runCommand(
 								consoleDrain: drain2,
 								recorder,
 								waitForNetworkIdle: waitForNetworkIdle2,
+								onStepComplete: printStepResult,
 							},
 						)
 						result.mode = "discovery"
@@ -346,7 +347,6 @@ export async function runCommand(
 
 						globals.trace.detachFromPage(page2)
 						await ctx2.close()
-						printStepResults(result)
 						printTestSummary(result)
 						if (config.headed) {
 							await new Promise((r) =>
@@ -377,6 +377,7 @@ export async function runCommand(
 							consoleDrain: drain,
 							recorder,
 							waitForNetworkIdle,
+							onStepComplete: printStepResult,
 						},
 					)
 					result.mode = "discovery"
@@ -394,7 +395,6 @@ export async function runCommand(
 					}
 				}
 
-				printStepResults(result)
 				printTestSummary(result)
 
 				if (config.headed) {
@@ -404,7 +404,7 @@ export async function runCommand(
 				globals.trace.detachFromPage(page)
 				if (persistentContext) {
 					// Persistent context is shared — close pages only
-					for (const p of context.pages()) await p.close().catch(() => {})
+					for (const p of context.pages()) await p.close().catch(() => { /* ignore */ })
 				} else {
 					await context.close()
 				}
@@ -420,6 +420,7 @@ export async function runCommand(
 			if (hashIndexDirty) {
 				await saveHashIndex(cwd, hashIndex)
 			}
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- browser is guaranteed non-null when persistentContext is null
 			await closeBrowser(persistentContext ?? browser!)
 		}
 	}

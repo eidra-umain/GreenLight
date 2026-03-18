@@ -150,11 +150,13 @@ export interface Action {
 	}
 	/** For remember actions: the variable name to store the captured value. */
 	rememberAs?: string
-	/** For compare assertions: reference to a remembered variable and operator. */
+	/** For compare assertions: reference to a remembered variable (or a literal value) and operator. */
 	compare?: {
-		/** The remembered variable name to compare against. */
+		/** The remembered variable name to compare against (ignored when `literal` is set). */
 		variable: string
 		/** Comparison operator. */
 		operator: "less_than" | "greater_than" | "equal" | "not_equal" | "less_or_equal" | "greater_or_equal"
+		/** When set, compare the page value against this literal instead of a remembered variable. */
+		literal?: string
 	}
 }

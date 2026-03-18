@@ -2,7 +2,9 @@
  * Assertion execution — validates page state against expected conditions.
  */
 
-import type { Page } from "playwright"
+import type { Locator, Page } from "playwright"
+import type { AriaRole } from "./locator.js"
+import { extractQuotedText, stripQuotes } from "./locator.js"
 import type { Action, A11yNode, MapState } from "../reporter/types.js"
 import type { MapAdapter } from "../map/types.js"
 import { globals } from "../globals.js"
@@ -68,6 +70,8 @@ export async function executeAssertion(
 		assertion.type === "contains_text" ||
 		assertion.type === "element_visible" ||
 		assertion.type === "element_exists" ||
+		assertion.type === "element_enabled" ||
+		assertion.type === "element_disabled" ||
 		assertion.type === "link_exists" ||
 		assertion.type === "field_exists"
 
@@ -90,6 +94,83 @@ export function extractNumber(text: string): number | null {
  * Execute a compare assertion: read a current value from the page,
  * compare it against a remembered value using the specified operator.
  */
+/**
+ * Search the page for a numeric value near keywords extracted from the hint.
+ *
+ * Strategy:
+ * 1. Try to find a single text segment that contains both a number and a keyword.
+ * 2. If that fails, search the full page text for a number appearing within a
+ *    short window (±80 chars) of a keyword match. This handles cases where the
+ *    number and label are in separate DOM elements (adjacent lines).
+ */
+async function findValueByKeyword(page: Page, hint: string): Promise<string> {
+	const keywords = hint
+		.replace(/_/g, " ")
+		.split(/\s+/)
+		.map((w) => stripQuotes(w))
+		.filter((w) => w.length > 2 && !/^(check|that|the|is|are|than|greater|less|equal|least|most|more|fewer|not)$/i.test(w))
+		.map((w) => w.toLowerCase())
+	const innerText = await page.locator("body").innerText()
+
+	// Strategy 1: single segment containing both a number and a keyword
+	const segments = innerText
+		.split(/[\n\t]+/)
+		.map((s) => s.trim())
+		.filter(Boolean)
+	let best = ""
+	for (const seg of segments) {
+		if (!/\d/.test(seg)) continue
+		const lower = seg.toLowerCase()
+		if (keywords.some((kw) => lower.includes(kw))) {
+			if (!best || seg.length < best.length) {
+				best = seg
+			}
+		}
+	}
+	if (best) {
+		if (globals.debug) {
+			console.log(`      [compare] Found current value by keyword search: "${best}"`)
+		}
+		return best
+	}
+
+	// Strategy 2: find a number near a keyword in the full page text
+	const fullLower = innerText.toLowerCase()
+	let closestNumber = ""
+	let closestDistance = Infinity
+	for (const kw of keywords) {
+		let searchFrom = 0
+		for (;;) {
+			const kwIdx = fullLower.indexOf(kw, searchFrom)
+			if (kwIdx === -1) break
+			searchFrom = kwIdx + 1
+			// Look for numbers within ±80 characters of the keyword
+			const windowStart = Math.max(0, kwIdx - 80)
+			const windowEnd = Math.min(innerText.length, kwIdx + kw.length + 80)
+			const window = innerText.slice(windowStart, windowEnd)
+			const numberMatches = window.matchAll(/\b(\d+\.?\d*)\b/g)
+			for (const m of numberMatches) {
+				const numIdx = windowStart + m.index
+				const dist = Math.abs(numIdx - kwIdx)
+				if (dist < closestDistance) {
+					closestDistance = dist
+					closestNumber = m[1]
+				}
+			}
+		}
+	}
+	if (closestNumber) {
+		if (globals.debug) {
+			console.log(`      [compare] Found current value by proximity search: "${closestNumber}" (distance: ${String(closestDistance)})`)
+		}
+		return closestNumber
+	}
+
+	throw new Error(
+		`compare assertion: could not find a value on the page matching "${hint}"`,
+	)
+}
+
 export async function executeCompareAssertion(
 	page: Page,
 	action: Action,
@@ -98,54 +179,54 @@ export async function executeCompareAssertion(
 	if (!action.compare) {
 		throw new Error("executeCompareAssertion called without compare metadata")
 	}
-	const { variable, operator } = action.compare
+	const { variable, operator, literal } = action.compare
 
-	// Get the remembered value from the global value store
-	if (!globals.valueStore.has(variable)) {
-		throw new Error(`No remembered value found for "${variable}"`)
-	}
-	const rememberedText = globals.valueStore.get(variable)
-	if (rememberedText === undefined) {
-		throw new Error(`No remembered value found for "${variable}"`)
-	}
-
-	// Get the current value from the page
-	let currentText: string
-	if (action.ref || action.text) {
-		const locator = await resolveActionTarget(page, action, a11yTree)
-		currentText = (await locator.textContent() ?? "").trim()
-	} else {
-		// No element target — use keyword search on the page (same approach
-		// as the remember fallback). Extract keywords from the variable name
-		// and find a matching text segment containing a number.
-		const keywords = variable
-			.replace(/_/g, " ")
-			.split(" ")
-			.filter((w) => w.length > 2)
-		const innerText = await page.locator("body").innerText()
-		const segments = innerText
-			.split(/[\n\t]+/)
-			.map((s) => s.trim())
-			.filter(Boolean)
-		let best = ""
-		for (const seg of segments) {
-			if (!/\d/.test(seg)) continue
-			const lower = seg.toLowerCase()
-			if (keywords.some((kw) => lower.includes(kw.toLowerCase()))) {
-				if (!best || seg.length < best.length) {
-					best = seg
-				}
-			}
-		}
-		if (!best) {
-			throw new Error(
-				`compare assertion: could not find a value on the page matching "${variable}"`,
-			)
-		}
-		currentText = best
+	// Get the baseline value: literal, remembered variable, or inferred from expected.
+	// The LLM sometimes omits "literal" and puts the number in assertion.expected
+	// (e.g. expected:"0" with a made-up variable name). Detect and recover.
+	let rememberedText: string
+	if (literal !== undefined) {
+		rememberedText = literal
+	} else if (globals.valueStore.has(variable)) {
+		rememberedText = globals.valueStore.get(variable) ?? ""
+	} else if (action.assertion?.expected && /^-?\d+\.?\d*$/.test(action.assertion.expected.trim())) {
+		// Fallback: expected is a pure number — treat as literal comparison
+		rememberedText = action.assertion.expected.trim()
 		if (globals.debug) {
-			console.log(`      [compare] Found current value by keyword search: "${currentText}"`)
+			console.log(`      [compare] No remembered "${variable}", using assertion.expected "${rememberedText}" as literal`)
 		}
+	} else {
+		throw new Error(`No remembered value found for "${variable}"`)
+	}
+
+	// Get the current value from the page.
+	// Try the element ref/text first; if the ref is stale, fall back to keyword search.
+	let currentText: string
+	const searchHint = action.assertion?.expected ?? variable
+	if (action.ref || action.text) {
+		try {
+			const locator = await resolveActionTarget(page, action, a11yTree)
+			currentText = (await locator.textContent() ?? "").trim()
+			// If the element was found but contains no number, the LLM likely
+			// picked a nearby element (e.g. a heading instead of the count).
+			// Fall back to keyword search.
+			if (!/\d/.test(currentText)) {
+				if (globals.debug) {
+					console.log(`      [compare] Element text "${currentText}" has no number, falling back to keyword search`)
+				}
+				currentText = await findValueByKeyword(page, searchHint)
+			}
+		} catch {
+			if (globals.debug) {
+				console.log(`      [compare] Element target failed, falling back to keyword search`)
+			}
+			currentText = await findValueByKeyword(page, searchHint)
+		}
+	} else {
+		// Use assertion.expected as hint (the step description) when the
+		// variable name is useless (e.g. "_" for literal comparisons).
+		const hint = (variable === "_" ? action.assertion?.expected : null) ?? variable
+		currentText = await findValueByKeyword(page, hint)
 	}
 
 	const rememberedNum = extractNumber(rememberedText)
@@ -158,8 +239,10 @@ export async function executeCompareAssertion(
 		throw new Error(`Cannot extract number from current value "${currentText}"`)
 	}
 
+	const baselineLabel = literal !== undefined ? `literal ${String(rememberedNum)}` : `"${variable}" (${String(rememberedNum)})`
+
 	if (globals.debug) {
-		console.log(`      [compare] "${variable}" = ${String(rememberedNum)}, current = ${String(currentNum)}, operator = ${operator}`)
+		console.log(`      [compare] baseline = ${baselineLabel}, current = ${String(currentNum)}, operator = ${operator}`)
 	}
 
 	let passed: boolean
@@ -175,9 +258,25 @@ export async function executeCompareAssertion(
 
 	if (!passed) {
 		throw new Error(
-			`Comparison failed: current value ${String(currentNum)} is not ${operator.replace(/_/g, " ")} remembered "${variable}" (${String(rememberedNum)})`,
+			`Comparison failed: current value ${String(currentNum)} is not ${operator.replace(/_/g, " ")} ${baselineLabel}`,
 		)
 	}
+}
+
+/**
+ * Find an interactive element by text, trying multiple roles.
+ * Throws if no matching element is found.
+ */
+async function findInteractiveElement(page: Page, text: string): Promise<Locator> {
+	const roles: AriaRole[] = ["button", "link", "radio", "checkbox", "tab", "menuitem"]
+	for (const role of roles) {
+		const el = page.getByRole(role, { name: text })
+		if (await el.count() > 0) return el.first()
+	}
+	// Fallback: any element with matching text
+	const byText = page.getByText(text, { exact: true })
+	if (await byText.count() > 0) return byText.first()
+	throw new Error(`No interactive element found with text "${text}"`)
 }
 
 export function buildAssertionCheck(
@@ -264,6 +363,24 @@ export function buildAssertionCheck(
 				break
 			}
 
+			case "element_disabled": {
+				const el = await findInteractiveElement(page, assertion.expected)
+				const disabled = await el.isDisabled()
+				if (!disabled) {
+					throw new Error(`Element "${assertion.expected}" is not disabled`)
+				}
+				break
+			}
+
+			case "element_enabled": {
+				const el = await findInteractiveElement(page, assertion.expected)
+				const enabled = await el.isEnabled()
+				if (!enabled) {
+					throw new Error(`Element "${assertion.expected}" is not enabled`)
+				}
+				break
+			}
+
 			default:
 				throw new Error(`Unknown assertion type: ${assertion.type}`)
 		}
@@ -284,7 +401,7 @@ async function findFeatureByName(
 	const features = await adapter.queryRenderedFeatures(page)
 	const lower = searchName.toLowerCase()
 	for (const f of features) {
-		const name = f.properties?.name
+		const name = f.properties.name
 		if (typeof name === "string" && name.toLowerCase().includes(lower)) {
 			return { found: true, layer: f.layer, name }
 		}
@@ -363,9 +480,9 @@ async function executeMapAssertion(
 	// Extract the search term: text in quotes, or after "shows"/"displays"/"contains",
 	// or the entire expected string as a fallback.
 	let searchTerm: string | null = null
-	const quotedMatch = /["'""]([^"'""]+)["'""]/.exec(expected)
+	const quotedMatch = extractQuotedText(expected)
 	if (quotedMatch) {
-		searchTerm = quotedMatch[1]
+		searchTerm = quotedMatch
 	} else {
 		const verbMatch = /(?:shows?|displays?|contains?|includes?|has|visible)\s+(.+)/i.exec(expected)
 		if (verbMatch) {
@@ -374,7 +491,7 @@ async function executeMapAssertion(
 	}
 
 	if (searchTerm) {
-		const adapter = mapContext?.adapter
+		const adapter = mapContext.adapter
 		if (!adapter) {
 			throw new Error("Map feature assertion failed: no map adapter available (was MAP_DETECT successful?)")
 		}

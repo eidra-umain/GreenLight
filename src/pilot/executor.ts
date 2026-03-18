@@ -90,6 +90,7 @@ export async function executeAction(
 	a11yTree: A11yNode[],
 	_valueStore?: Map<string, string>,
 	mapContext?: { state?: MapState; adapter?: MapAdapter },
+	stepHint?: string,
 ): Promise<ExecutionResult> {
 	const start = performance.now()
 	let rememberedValue: string | undefined
@@ -98,19 +99,29 @@ export async function executeAction(
 	try {
 		switch (action.action) {
 			case "click": {
-				const locator = await resolveActionTarget(page, action, a11yTree)
+				const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
 				resolvedSelector = await extractSelectorInfo(
 					page,
 					action,
 					a11yTree,
 					locator,
 				)
+				// Wait for the element to be visible and stable before clicking.
+				// Menus and dropdowns may still be animating when the step starts.
+				await locator.waitFor({ state: "visible", timeout: 5000 })
+				// Fail fast if the target is a disabled button — don't wait 30s
+				// for Playwright's built-in enabled check to time out.
+				const isDisabled = await locator.isDisabled().catch(() => false)
+				if (isDisabled) {
+					const label = (await locator.textContent().catch(() => "unknown")) ?? "unknown"
+					throw new Error(`Cannot click disabled element "${label.trim()}"`)
+				}
 				await runWithNavigationHandling(page, () => locator.click())
 				break
 			}
 
 			case "check": {
-				const locator = await resolveActionTarget(page, action, a11yTree)
+				const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
 				resolvedSelector = await extractSelectorInfo(
 					page,
 					action,
@@ -122,7 +133,7 @@ export async function executeAction(
 			}
 
 			case "uncheck": {
-				const locator = await resolveActionTarget(page, action, a11yTree)
+				const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
 				resolvedSelector = await extractSelectorInfo(
 					page,
 					action,
@@ -137,43 +148,46 @@ export async function executeAction(
 				if (!action.value) {
 					throw new Error("type action requires a value")
 				}
-				const locator = await resolveActionTarget(page, action, a11yTree)
+				const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
 				resolvedSelector = await extractSelectorInfo(
 					page,
 					action,
 					a11yTree,
 					locator,
 				)
-				// Click to focus, clear existing value, then type character by
-				// character. pressSequentially dispatches real keydown/keypress/
-				// keyup/input events per keystroke, which is required for
-				// frameworks that rely on JS input events (React onChange, custom
-				// validation, etc.). fill() bypasses these.
-				await locator.click()
-				await locator.fill("")
-				await locator.pressSequentially(action.value, { delay: 30 })
+				// Use real keypresses throughout — click to focus, select-all
+				// + delete to clear, then type character by character.
+				// This looks like a real user to the page and triggers all JS
+				// event handlers (React onChange, custom validation, per-char
+				// rendering, etc.). Playwright's fill() bypasses these.
+				// Use force:true on click — inputs often have decorative icon
+				// overlays (search icons, location pins) that cover part of the
+				// element. The input is the correct target regardless.
+				// Use page.keyboard instead of locator.press/pressSequentially
+				// because locator methods also do actionability checks that fail
+				// on covered inputs.
+				await locator.click({ force: true })
+				const selectAll = process.platform === "darwin" ? "Meta+a" : "Control+a"
+				await page.keyboard.press(selectAll)
+				await page.keyboard.press("Backspace")
+				await page.keyboard.type(action.value, { delay: 30 })
 
-				// Verify the value landed correctly. Async UI (search dropdowns,
-				// autocomplete overlays) can steal focus or trigger re-renders
-				// that swallow the last keystrokes. If the value drifted, re-focus
-				// and type the missing suffix.
-				const actual = await locator.inputValue().catch(() => "")
+				// Verify the value landed correctly. Use evaluate on the
+				// active element to avoid locator actionability timeouts
+				// (the input's accessible name may change after typing).
+				const actual = await page.evaluate(
+					() => {
+						const el = document.activeElement as HTMLInputElement | null
+						return el?.value ?? ""
+					},
+				).catch(() => "")
 				if (actual !== action.value) {
 					if (globals.debug) {
 						console.log(`      [type] Value drifted: got "${actual}", expected "${action.value}" — correcting`)
 					}
-					await locator.click()
-					if (action.value.startsWith(actual)) {
-						// Only the tail is missing — append it
-						await locator.pressSequentially(
-							action.value.slice(actual.length),
-							{ delay: 30 },
-						)
-					} else {
-						// Value is garbled — clear and retype
-						await locator.fill("")
-						await locator.pressSequentially(action.value, { delay: 30 })
-					}
+					await page.keyboard.press(selectAll)
+					await page.keyboard.press("Backspace")
+					await page.keyboard.type(action.value, { delay: 30 })
 				}
 				break
 			}
@@ -182,7 +196,7 @@ export async function executeAction(
 				if (!action.value) {
 					throw new Error("select action requires a value")
 				}
-				const locator = await resolveActionTarget(page, action, a11yTree)
+				const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
 				resolvedSelector = await extractSelectorInfo(
 					page,
 					action,
@@ -323,7 +337,7 @@ export async function executeAction(
 				if (!action.value) {
 					throw new Error("autocomplete action requires a value")
 				}
-				const locator = await resolveActionTarget(page, action, a11yTree)
+				const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
 				resolvedSelector = await extractSelectorInfo(
 					page,
 					action,
@@ -340,10 +354,12 @@ export async function executeAction(
 					}
 				}
 
-				// Click to focus, then type character by character to trigger autocomplete
-				await locator.click()
-				await locator.fill("")
-				await locator.pressSequentially(action.value, { delay: 50 })
+				// Click to focus, clear, then type character by character to trigger autocomplete
+				await locator.click({ force: true })
+				const acSelectAll = process.platform === "darwin" ? "Meta+a" : "Control+a"
+				await page.keyboard.press(acSelectAll)
+				await page.keyboard.press("Backspace")
+				await page.keyboard.type(action.value, { delay: 50 })
 
 				if (globals.debug) {
 					console.log(`      [autocomplete] Typed "${action.value}", waiting for suggestions...`)
@@ -490,7 +506,7 @@ export async function executeAction(
 			case "remember": {
 				let capturedText: string
 				if (action.ref || action.text) {
-					const locator = await resolveActionTarget(page, action, a11yTree)
+					const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
 					resolvedSelector = await extractSelectorInfo(
 						page,
 						action,

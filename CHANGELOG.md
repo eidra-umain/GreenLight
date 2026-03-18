@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-03-18
+
+### Added
+
+- **Numeric comparison assertions** — steps like `check that the count of produkter shown is greater than 0` now work. Supports `greater than`, `less than`, `at least`, `at most`, `equals`, and `not equal` with literal numbers. Works via `assert numeric` in the planner and `COMPARE_VALUE` in the parser.
+- **`element_disabled` / `element_enabled` assertion types** — verify button state with steps like `verify that the "Submit" button is disabled`. Searches multiple interactive roles (button, link, radio, checkbox, tab, menuitem), with polling for `element_enabled` to handle async state changes.
+- **Custom radio card support** — Chakra UI radio cards and similar custom components (rendered as `text` nodes inside `radiogroup` in the a11y tree) now get element refs and can be targeted by click actions.
+- **Live step progress output** — step results are now printed as they complete during both discovery and cached runs, instead of all at once after the test finishes.
+
+### Changed
+
+- **Prompt architecture overhaul** — all three LLM prompts (planner, runtime, expander) restructured with consistent section headers, clear decision trees, and inline extension guide. The planner prompt uses classification-first routing for assertions.
+- **Page stabilization after every action** — clicks, types, selects, and other mutating actions now wait for `domcontentloaded` + network idle before proceeding to the next step. Applies to both discovery and cached runs. Eliminates race conditions where pre-resolved assertions ran before the page settled.
+- **Real keypresses for all text input** — `type` and `autocomplete` actions now use `page.keyboard.type()` instead of Playwright's `fill()`. This fires real keydown/keypress/input events per character, required for frameworks with per-character rendering (e.g. formatted inputs, live validation). Input clearing uses Cmd/Ctrl+A + Backspace instead of `fill("")`.
+- **Force-click on inputs** — the initial focus click for type actions uses `force: true` to bypass actionability checks, handling inputs with decorative icon overlays (search icons, location pins).
+- **`pickVisible` checks visibility for single matches** — locator resolution now verifies even single-match locators are visible before returning, allowing fallback to alternative locator strategies.
+- **Locator text fallback uses step hint** — when resolving `text` role nodes (e.g. radio cards), the locator extracts the quoted text from the step instruction for matching, instead of using the full concatenated a11y node name which often mismatches the DOM.
+- **Shared quote handling** — `extractQuotedText()` and `stripQuotes()` utilities handle straight and curly quotes consistently across locator resolution, keyword search, and map assertions.
+- **Compare assertion resilience** — falls back to keyword search when the LLM targets the wrong element (e.g. a heading instead of the count), when the element ref is stale, or when the variable name is `"_"` (literal comparison).
+
+### Fixed
+
+- **Disabled button click fails fast** — clicking a disabled element now throws immediately with a clear error message instead of timing out for 30 seconds.
+- **Cached plan preserves `literal` field** — `COMPARE_VALUE` assertions with literal numbers now work correctly in cached runs.
+- **Cached plan handles `text` role nodes** — `buildLocator` in the cached runner resolves `text` role elements via `getByText` instead of the invalid `getByRole('text', ...)`.
+- **Keyword search proximity matching** — when a number and its label keyword are in separate DOM elements (adjacent lines), the search now finds numbers within 80 characters of a keyword match.
+- **Keyword search strips quotes** — quoted content words in step descriptions (e.g. `'produkter'`) no longer fail keyword matching.
+
+### Documentation
+
+- **Language convention** — test steps referencing page content must use the same language as the application under test. Added to specifications with good/bad examples.
+- **Prompt extension guide** — file-level comments in `prompts.ts` explain how the three prompts relate and provide checklists for adding new actions or assertion types.
+
 ## [0.2.0] - 2026-03-17
 
 ### Added

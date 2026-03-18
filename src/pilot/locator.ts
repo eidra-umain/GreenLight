@@ -7,6 +7,29 @@ import type { A11yNode, Action, ResolvedSelector } from "../reporter/types.js"
 
 export type AriaRole = Parameters<Page["getByRole"]>[0]
 
+/** All quote characters we recognise (straight + curly). */
+const QUOTE_CHARS = `"'""''`
+const QUOTE_RE = new RegExp(`[${QUOTE_CHARS}]([^${QUOTE_CHARS}]+)[${QUOTE_CHARS}]`)
+
+/**
+ * Extract the first quoted substring from text, handling straight and
+ * curly quotes. Returns the inner text, or null if no quotes found.
+ *
+ * Shared across locator resolution and assertion keyword extraction
+ * so quote handling is consistent everywhere.
+ */
+export function extractQuotedText(text: string): string | null {
+	const match = QUOTE_RE.exec(text)
+	return match ? match[1] : null
+}
+
+/**
+ * Strip all quote characters from a string.
+ */
+export function stripQuotes(text: string): string {
+	return text.replace(new RegExp(`[${QUOTE_CHARS}]`, "g"), "")
+}
+
 /**
  * Find an A11yNode by its ref ID, searching the tree recursively.
  */
@@ -52,7 +75,11 @@ export function findNodePath(
 export async function pickVisible(locator: Locator): Promise<Locator | undefined> {
 	try {
 		const count = await locator.count()
-		if (count === 1) return locator
+		if (count === 1) {
+			// Verify the single match is actually visible
+			if (await locator.isVisible()) return locator
+			return undefined
+		}
 		if (count > 1) {
 			for (let i = 0; i < count; i++) {
 				const nth = locator.nth(i)
@@ -90,6 +117,7 @@ export async function resolveLocator(
 	page: Page,
 	nodes: A11yNode[],
 	ref: string,
+	stepHint?: string,
 ): Promise<Locator> {
 	const path = findNodePath(nodes, ref)
 	if (!path || path.length === 0) {
@@ -99,42 +127,70 @@ export async function resolveLocator(
 	const target = path[path.length - 1]
 	const role = target.role as AriaRole
 
+	// "text" is not a valid ARIA role — it comes from Playwright's a11y
+	// snapshot for plain text nodes (e.g. radio cards rendered as text
+	// inside a radiogroup). Resolve these by text content instead.
+	const isNonAriaRole = target.role === "text"
+
+	// Extract the meaningful text from the step hint. The hint is the full
+	// step description (e.g. "click 'Hämta produkt i butik'") — extract
+	// the quoted portion if present, or strip the action verb prefix.
+	let hintText = stepHint
+	if (hintText) {
+		hintText = extractQuotedText(hintText)
+			?? (hintText.replace(/^(?:click|select|check|type|press|scroll|navigate|wait|assert|verify)\s+(?:on\s+(?:the\s+)?)?/i, "").trim()
+			|| hintText)
+	}
+
 	// Build candidates list, best to worst
 	const candidates: Locator[] = []
 
-	// 1. Chained locator using ancestor hierarchy
-	//    Use named ancestors to scope the search progressively
-	if (path.length > 1) {
-		let scoped: Locator | undefined
-		for (const ancestor of path.slice(0, -1)) {
-			// Only chain through named nodes — unnamed structural nodes
-			// (like bare "list" or "main") add noise without disambiguation
-			if (!ancestor.name) continue
-			scoped = roleLocator(scoped ?? page, ancestor)
+	if (isNonAriaRole && target.name) {
+		// For non-ARIA roles (e.g. "text" nodes inside radiogroups), use
+		// text-based resolution. Try the full a11y name first, then fall
+		// back to the step hint text (the quoted text from the step
+		// instruction, e.g. "Hämta produkt i butik") for a partial match.
+		candidates.push(page.getByText(target.name, { exact: true }))
+		candidates.push(page.getByText(target.name))
+		if (hintText) {
+			candidates.push(page.getByText(hintText, { exact: true }))
+			candidates.push(page.getByText(hintText))
 		}
-		if (scoped) {
-			candidates.push(roleLocator(scoped, target))
+	} else {
+		// 1. Chained locator using ancestor hierarchy
+		//    Use named ancestors to scope the search progressively
+		if (path.length > 1) {
+			let scoped: Locator | undefined
+			for (const ancestor of path.slice(0, -1)) {
+				// Only chain through named nodes — unnamed structural nodes
+				// (like bare "list" or "main") add noise without disambiguation
+				if (!ancestor.name) continue
+				scoped = roleLocator(scoped ?? page, ancestor)
+			}
+			if (scoped) {
+				candidates.push(roleLocator(scoped, target))
+			}
 		}
-	}
 
-	// 2. Direct getByRole with exact name
-	if (target.name) {
-		candidates.push(page.getByRole(role, { name: target.name, exact: true }))
-	}
+		// 2. Direct getByRole with exact name
+		if (target.name) {
+			candidates.push(page.getByRole(role, { name: target.name, exact: true }))
+		}
 
-	// 3. getByLabel (finds inputs by associated label text)
-	if (target.name) {
-		candidates.push(page.getByLabel(target.name, { exact: true }))
-	}
+		// 3. getByLabel (finds inputs by associated label text)
+		if (target.name) {
+			candidates.push(page.getByLabel(target.name, { exact: true }))
+		}
 
-	// 4. getByPlaceholder (finds inputs by placeholder attribute)
-	if (target.name) {
-		candidates.push(page.getByPlaceholder(target.name, { exact: true }))
-	}
+		// 4. getByPlaceholder (finds inputs by placeholder attribute)
+		if (target.name) {
+			candidates.push(page.getByPlaceholder(target.name, { exact: true }))
+		}
 
-	// 5. Direct getByRole with loose name match
-	if (target.name) {
-		candidates.push(page.getByRole(role, { name: target.name }))
+		// 5. Direct getByRole with loose name match
+		if (target.name) {
+			candidates.push(page.getByRole(role, { name: target.name }))
+		}
 	}
 
 	// Try each candidate: return the first that matches exactly one element,
@@ -144,7 +200,12 @@ export async function resolveLocator(
 		if (match) return match
 	}
 
-	// Last resort — return the basic locator and let Playwright handle errors
+	// Last resort — return the basic locator and let Playwright handle errors.
+	// For non-ARIA roles (text nodes), prefer the step hint over the full
+	// concatenated a11y name which often doesn't match the DOM text.
+	if (isNonAriaRole) {
+		return page.getByText(hintText ?? target.name)
+	}
 	if (target.name) {
 		return page.getByRole(role, { name: target.name })
 	}
@@ -158,13 +219,17 @@ export async function resolveLocator(
  */
 export async function resolveByText(page: Page, text: string): Promise<Locator> {
 	const candidates: Locator[] = [
-		// Exact text match (link, button, or any element)
+		// Exact text match — try common interactive roles first, then any element
 		page.getByRole("link", { name: text, exact: true }),
 		page.getByRole("button", { name: text, exact: true }),
+		page.getByRole("radio", { name: text, exact: true }),
+		page.getByRole("checkbox", { name: text, exact: true }),
+		page.getByRole("tab", { name: text, exact: true }),
 		page.getByText(text, { exact: true }),
 		// Loose match
 		page.getByRole("link", { name: text }),
 		page.getByRole("button", { name: text }),
+		page.getByRole("radio", { name: text }),
 		page.getByText(text),
 	]
 
@@ -184,9 +249,10 @@ export async function resolveActionTarget(
 	page: Page,
 	action: Action,
 	a11yTree: A11yNode[],
+	stepHint?: string,
 ): Promise<Locator> {
 	if (action.ref) {
-		return resolveLocator(page, a11yTree, action.ref)
+		return resolveLocator(page, a11yTree, action.ref, stepHint)
 	}
 	if (action.text) {
 		return resolveByText(page, action.text)

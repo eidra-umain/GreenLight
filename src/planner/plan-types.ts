@@ -33,7 +33,7 @@ export interface HeuristicStep {
 	/** Assertion details for assert actions. */
 	assertion?: { type: string; expected: string }
 	/** For compare assertions: the comparison metadata. */
-	compare?: { variable: string; operator: string }
+	compare?: { variable: string; operator: string; literal?: string }
 	/** Page state after the step executed, for drift detection. */
 	postStepFingerprint: {
 		url: string

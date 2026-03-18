@@ -267,6 +267,7 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 				console.log(
 					`      [resolve] Mode: ${compactMode} (${String(userMessage.length)} chars)`,
 				)
+				console.log(`      [resolve] LLM input:\n${userMessage}`)
 			}
 
 			// Build messages: system + history + new user message

@@ -5,22 +5,32 @@
  */
 
 import type { Page, Locator } from "playwright"
-import type { Action, StepResult, TestCaseResult } from "../reporter/types.js"
+import type { Action, MapState, StepResult, TestCaseResult } from "../reporter/types.js"
 import type { HeuristicPlan, HeuristicSelector, HeuristicStep } from "./plan-types.js"
 import type { MapAdapter } from "../map/types.js"
 import { detectMap, captureMapState } from "../map/index.js"
 import { executeAction, runWithNavigationHandling } from "../pilot/executor.js"
 import { checkCheckbox } from "../pilot/checkbox.js"
+import { extractQuotedText } from "../pilot/locator.js"
 import { globals } from "../globals.js"
 
 type AriaRole = Parameters<Page["getByRole"]>[0]
 
 /** Build a Playwright locator from a stored heuristic selector. */
-function buildLocator(page: Page, selector: HeuristicSelector) {
+function buildLocator(page: Page, selector: HeuristicSelector, stepHint?: string) {
 	if (selector.css) {
 		return page.locator(selector.css)
 	}
 	if (selector.role) {
+		// "text" is not a valid ARIA role — it comes from Playwright's a11y
+		// snapshot for plain text nodes (e.g. radio cards inside radiogroups).
+		// Resolve by text content instead, using the step hint if available.
+		if (selector.role === "text" && selector.name) {
+			if (stepHint) {
+				return page.getByText(stepHint)
+			}
+			return page.getByText(selector.name)
+		}
 		const role = selector.role as AriaRole
 		let locator = selector.name
 			? page.getByRole(role, { name: selector.name })
@@ -46,11 +56,16 @@ async function executeHeuristicStep(
 ): Promise<{ success: boolean; duration: number; error?: string }> {
 	const start = performance.now()
 
+	// Extract hint text from the step for text-node resolution
+	const hintText = extractQuotedText(step.originalStep)
+		?? (step.originalStep.replace(/^(?:click|select|check|type|press|scroll|navigate|wait|assert|verify)\s+(?:on\s+(?:the\s+)?)?/i, "").trim()
+		|| step.originalStep)
+
 	try {
 		switch (step.action) {
 			case "click": {
 				if (!step.selector) throw new Error("click step requires a selector")
-				const locator = buildLocator(page, step.selector)
+				const locator = buildLocator(page, step.selector, hintText)
 				await runWithNavigationHandling(page, () => locator.click())
 				break
 			}
@@ -58,7 +73,7 @@ async function executeHeuristicStep(
 			case "type": {
 				if (!step.value) throw new Error("type step requires a value")
 				if (!step.selector) throw new Error("type step requires a selector")
-				const locator = buildLocator(page, step.selector)
+				const locator = buildLocator(page, step.selector, hintText)
 				await locator.fill(step.value)
 				break
 			}
@@ -66,7 +81,7 @@ async function executeHeuristicStep(
 			case "select": {
 				if (!step.value) throw new Error("select step requires a value")
 				if (!step.selector) throw new Error("select step requires a selector")
-				const locator = buildLocator(page, step.selector)
+				const locator = buildLocator(page, step.selector, hintText)
 				const tag = await locator.evaluate((el) => el.tagName).catch(() => "")
 				if (tag === "SELECT") {
 					await locator.selectOption({ label: step.value })
@@ -121,7 +136,7 @@ async function executeHeuristicStep(
 			case "autocomplete": {
 				if (!step.value) throw new Error("autocomplete step requires a value")
 				if (!step.selector) throw new Error("autocomplete step requires a selector")
-				const locator = buildLocator(page, step.selector)
+				const locator = buildLocator(page, step.selector, hintText)
 				await locator.click()
 				await locator.fill("")
 				await locator.pressSequentially(step.value, { delay: 50 })
@@ -178,25 +193,39 @@ async function executeHeuristicStep(
 
 			case "check": {
 				if (!step.selector) throw new Error("check step requires a selector")
-				const locator = buildLocator(page, step.selector)
+				const locator = buildLocator(page, step.selector, hintText)
 				await checkCheckbox(page, locator, true)
 				break
 			}
 
 			case "uncheck": {
 				if (!step.selector) throw new Error("uncheck step requires a selector")
-				const locator = buildLocator(page, step.selector)
+				const locator = buildLocator(page, step.selector, hintText)
 				await checkCheckbox(page, locator, false)
 				break
 			}
 
 			case "remember": {
 				const varName = step.rememberAs ?? step.value ?? ""
-				let capturedText: string
+				const wantsNumber = /number|count|total|amount|qty|quantity|pris|antal|resultat/.test(
+					varName.toLowerCase(),
+				)
+				let capturedText = ""
 				if (step.selector) {
-					const locator = buildLocator(page, step.selector)
+					const locator = buildLocator(page, step.selector, hintText)
 					capturedText = (await locator.textContent() ?? "").trim()
-				} else {
+					// If the variable name implies a number but the captured text
+					// has none, the stored selector likely points to a nearby
+					// element (e.g. a heading instead of the count). Fall back to
+					// keyword search on the page.
+					if (wantsNumber && !/\d/.test(capturedText)) {
+						if (globals.debug) {
+							console.log(`      [cached:remember] "${capturedText}" has no number, falling back to keyword search`)
+						}
+						capturedText = ""
+					}
+				}
+				if (!capturedText) {
 					// No selector stored — use innerText (preserves visual
 					// line breaks) and search for text matching keywords
 					const keywords = varName
@@ -235,7 +264,7 @@ async function executeHeuristicStep(
 
 			case "scroll": {
 				if (step.selector) {
-					const locator = buildLocator(page, step.selector)
+					const locator = buildLocator(page, step.selector, hintText)
 					await locator.scrollIntoViewIfNeeded()
 				} else {
 					const delta = step.value === "up" ? -500 : 500
@@ -266,6 +295,7 @@ async function executeHeuristicStep(
 					action.compare = {
 						variable: step.compare.variable,
 						operator: step.compare.operator as Action["compare"] extends { operator: infer O } ? O : never,
+						...(step.compare.literal !== undefined ? { literal: step.compare.literal } : {}),
 					}
 					action.assertion = { type: "compare", expected: step.originalStep }
 				}
@@ -281,8 +311,8 @@ async function executeHeuristicStep(
 					action.rememberAs = step.rememberAs
 				}
 				// Pass map context for map_state assertions
-				const mapContext = mapAdapter
-					? { adapter: mapAdapter, state: undefined as any }
+				const mapContext: { adapter: MapAdapter; state?: MapState } | undefined = mapAdapter
+					? { adapter: mapAdapter, state: undefined }
 					: undefined
 				if (mapContext && mapAdapter) {
 					try {
@@ -328,10 +358,14 @@ export async function runCachedPlan(
 	page: Page,
 	plan: HeuristicPlan,
 	testName: string,
-	options?: { waitForNetworkIdle?: () => Promise<void> },
+	options?: { waitForNetworkIdle?: () => Promise<void>; onStepComplete?: (result: StepResult) => void },
 ): Promise<TestCaseResult> {
 	const startTime = performance.now()
 	const stepResults: StepResult[] = []
+	const recordStep = (result: StepResult) => {
+		stepResults.push(result)
+		options?.onStepComplete?.(result)
+	}
 	let drifted = false
 	let mapAdapter: MapAdapter | null = null
 	globals.valueStore.clear()
@@ -350,7 +384,7 @@ export async function runCachedPlan(
 				mapAdapter = await detectMap(page)
 				if (!mapAdapter) {
 					drifted = true
-					stepResults.push({
+					recordStep({
 						step: step.originalStep,
 						action: { action: "map_detect" },
 						status: "failed",
@@ -359,7 +393,7 @@ export async function runCachedPlan(
 					})
 					break
 				}
-				stepResults.push({
+				recordStep({
 					step: step.originalStep,
 					action: { action: "map_detect" },
 					status: "passed",
@@ -368,7 +402,7 @@ export async function runCachedPlan(
 				continue
 			} catch (err) {
 				drifted = true
-				stepResults.push({
+				recordStep({
 					step: step.originalStep,
 					action: { action: "map_detect" },
 					status: "failed",
@@ -381,9 +415,18 @@ export async function runCachedPlan(
 
 		const result = await executeHeuristicStep(page, step, mapAdapter)
 
+		// Wait for the page to stabilize after mutating actions
+		// (click, type, select, etc.) so the next step sees a settled page.
+		if (result.success && step.action !== "assert") {
+			await page.waitForLoadState("domcontentloaded")
+			if (options?.waitForNetworkIdle) {
+				await options.waitForNetworkIdle()
+			}
+		}
+
 		if (!result.success) {
 			drifted = true
-			stepResults.push({
+			recordStep({
 				step: step.originalStep,
 				action: {
 					action: step.action,
@@ -402,11 +445,20 @@ export async function runCachedPlan(
 		// navigation-triggering action the URL may have changed legitimately
 		// before the assert runs. The fingerprint from discovery may reflect
 		// a pre-navigation snapshot.
-		const currentUrl = page.url()
 		const isAssert = step.action === "assert"
+		// For navigation-triggering actions, wait briefly for the URL to
+		// update — client-side routers (Next.js, React Router) may update
+		// the URL via pushState slightly after the DOM settles.
+		if (!isAssert && hasPathDrift(step.postStepFingerprint.url, page.url())) {
+			try {
+				const expectedPath = new URL(step.postStepFingerprint.url).pathname
+				await page.waitForURL(`**${expectedPath}*`, { timeout: 5000 })
+			} catch { /* URL didn't update — will be caught by drift check below */ }
+		}
+		const currentUrl = page.url()
 		if (!isAssert && hasPathDrift(step.postStepFingerprint.url, currentUrl)) {
 			drifted = true
-			stepResults.push({
+			recordStep({
 				step: step.originalStep,
 				action: {
 					action: step.action,
@@ -420,7 +472,7 @@ export async function runCachedPlan(
 			break
 		}
 
-		stepResults.push({
+		recordStep({
 			step: step.originalStep,
 			action: {
 				action: step.action,

@@ -8,6 +8,7 @@ import type {
 	A11yNode,
 	Action,
 	ConsoleEntry,
+	MapState,
 	StepResult,
 	StepTiming,
 	TestCaseResult,
@@ -32,6 +33,8 @@ export interface PilotOptions {
 	recorder?: PlanRecorder
 	/** Wait for network requests to settle before capturing page state. */
 	waitForNetworkIdle?: () => Promise<void>
+	/** Called after each step completes, for live progress output. */
+	onStepComplete?: (result: StepResult) => void
 }
 
 /**
@@ -46,6 +49,10 @@ export async function runTestCase(
 ): Promise<TestCaseResult> {
 	const startTime = performance.now()
 	const stepResults: StepResult[] = []
+	const recordStep = (result: StepResult) => {
+		stepResults.push(result)
+		options.onStepComplete?.(result)
+	}
 
 	// Fresh conversation history, stable ref map, and value store for each test case
 	llm.resetHistory()
@@ -112,7 +119,7 @@ export async function runTestCase(
 	// Map adapter — set by MAP_DETECT, then passed to all subsequent state captures
 	let mapAdapter: MapAdapter | null = null
 	// Latest captured map state — passed to assertions
-	let latestMapState: import("../reporter/types.js").MapState | undefined
+	let latestMapState: MapState | undefined
 
 	while (queueIndex < queue.length && !failed) {
 		const planned = queue[queueIndex]
@@ -129,7 +136,7 @@ export async function runTestCase(
 				}
 				mapAdapter = await detectMap(page)
 				if (!mapAdapter) {
-					stepResults.push({
+					recordStep({
 						step,
 						action: null,
 						status: "failed",
@@ -148,7 +155,7 @@ export async function runTestCase(
 							{ url: page.url(), title: await page.title() },
 						)
 					}
-					stepResults.push({
+					recordStep({
 						step,
 						action: null,
 						status: "passed",
@@ -156,7 +163,7 @@ export async function runTestCase(
 					})
 				}
 			} catch (err) {
-				stepResults.push({
+				recordStep({
 					step,
 					action: null,
 					status: "failed",
@@ -201,7 +208,7 @@ export async function runTestCase(
 				// Splice expanded sub-steps into the queue at the current position
 				queue.splice(queueIndex, 0, ...expandedSteps)
 			} catch (err) {
-				stepResults.push({
+				recordStep({
 					step,
 					action: null,
 					status: "failed",
@@ -275,14 +282,16 @@ export async function runTestCase(
 			}
 
 			// Propagate compare metadata from planned step to action.
-			// The LLM resolves the element ref at runtime; we inject the
-			// comparison operator and variable from the plan.
+			// The plan is authoritative for comparison logic — always override
+			// whatever the runtime LLM may have generated (it doesn't know
+			// about literal values or the correct variable name).
 			if (plannedCompare) {
-				action.compare ??= {
+				action.compare = {
 					variable: plannedCompare.variable,
 					operator: plannedCompare.operator as Action["compare"] extends { operator: infer O } ? O : never,
+					...(plannedCompare.literal !== undefined ? { literal: plannedCompare.literal } : {}),
 				}
-				action.assertion ??= { type: "compare", expected: step }
+				action.assertion = { type: "compare", expected: step }
 				action.action = "assert"
 			}
 
@@ -296,7 +305,7 @@ export async function runTestCase(
 			const result = await executeAction(page, action, a11yTree, undefined, {
 				state: latestMapState,
 				adapter: mapAdapter ?? undefined,
-			})
+			}, step)
 			timing.execute = performance.now() - t0
 			trace.log(
 				"execute:done",
@@ -304,7 +313,7 @@ export async function runTestCase(
 			)
 
 			if (!result.success) {
-				stepResults.push({
+				recordStep({
 					step,
 					action,
 					status: "failed",
@@ -321,8 +330,17 @@ export async function runTestCase(
 				globals.valueStore.set(action.rememberAs, result.rememberedValue)
 			}
 
+			// Wait for the page to stabilize after mutating actions
+			// (click, type, select, etc.) so the next step sees a settled page.
+			// Assertions don't mutate the page, so skip for those.
+			if (action.action !== "assert") {
+				await page.waitForLoadState("domcontentloaded")
+				if (options.waitForNetworkIdle) {
+					await options.waitForNetworkIdle()
+				}
+			}
+
 			// Capture post-action screenshot for reporting
-			// Retry once if the page is mid-navigation
 			trace.log("postCapture:start")
 			t0 = performance.now()
 			let postState
@@ -353,7 +371,7 @@ export async function runTestCase(
 				})
 			}
 
-			stepResults.push({
+			recordStep({
 				step,
 				action,
 				status: "passed",
@@ -367,7 +385,7 @@ export async function runTestCase(
 			const { LLMApiError } = await import("./providers/index.js")
 			if (err instanceof LLMApiError) throw err
 
-			stepResults.push({
+			recordStep({
 				step,
 				action,
 				status: "failed",

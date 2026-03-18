@@ -14,8 +14,8 @@ export interface PlannedStep {
 	needsMapDetect?: boolean
 	/** For REMEMBER steps: the variable name to store the captured value under. */
 	rememberAs?: string
-	/** For COMPARE steps: the comparison metadata (variable + operator). Resolved at runtime. */
-	compare?: { variable: string; operator: string }
+	/** For COMPARE steps: the comparison metadata (variable + operator, or literal). Resolved at runtime. */
+	compare?: { variable: string; operator: string; literal?: string }
 }
 
 /** Parse a JSON string from the LLM into a validated Action. */
@@ -87,6 +87,7 @@ export function parseActionResponse(raw: string): Action {
 			action.compare = {
 				variable: c.variable,
 				operator: c.operator as Action["compare"] extends { operator: infer O } ? O : never,
+				...(typeof c.literal === "string" ? { literal: c.literal } : {}),
 			}
 		}
 	}
@@ -110,7 +111,7 @@ function parsePlanAction(token: string): {
 	needsExpansion?: boolean
 	needsMapDetect?: boolean
 	rememberAs?: string
-	compare?: { variable: string; operator: string }
+	compare?: { variable: string; operator: string; literal?: string }
 } {
 	const t = token.trim()
 
@@ -140,6 +141,39 @@ function parsePlanAction(token: string): {
 		}
 	}
 
+	// COMPARE_VALUE — two forms:
+	// 1. Explicit: COMPARE_VALUE "description" "operator" "literal"
+	// 2. Simple:   COMPARE_VALUE "full step text"  (operator + literal extracted from text)
+	const compareValueExplicit = /^compare_value\s+"([^"]+)"\s+"([^"]+)"\s+"([^"]*)"$/i.exec(t)
+	if (compareValueExplicit) {
+		return {
+			action: null,
+			description: compareValueExplicit[1],
+			compare: {
+				variable: "_",
+				operator: compareValueExplicit[2],
+				literal: compareValueExplicit[3],
+			},
+		}
+	}
+	const compareValueSimple = /^compare_value\s+"([^"]+)"$/i.exec(t)
+	if (compareValueSimple) {
+		const parsed = extractComparisonFromText(compareValueSimple[1])
+		if (parsed) {
+			return {
+				action: null,
+				description: compareValueSimple[1],
+				compare: {
+					variable: "_",
+					operator: parsed.operator,
+					literal: parsed.literal,
+				},
+			}
+		}
+		// Could not parse — fall through to PAGE-like handling
+		return { action: null, description: compareValueSimple[1] }
+	}
+
 	// MAP_DETECT — detect and attach to a map instance
 	if (/^map_detect$/i.test(t)) {
 		return { action: null, description: "Detect map instance", needsMapDetect: true }
@@ -163,6 +197,23 @@ function parsePlanAction(token: string): {
 	// assert <type> "<expected>"
 	const assertMatch = /^assert\s+(\S+)\s+"([^"]*)"$/i.exec(t)
 	if (assertMatch) {
+		// assert numeric "..." → extract comparison from text, treat like COMPARE_VALUE
+		if (assertMatch[1].toLowerCase() === "numeric") {
+			const parsed = extractComparisonFromText(assertMatch[2])
+			if (parsed) {
+				return {
+					action: null,
+					description: assertMatch[2],
+					compare: {
+						variable: "_",
+						operator: parsed.operator,
+						literal: parsed.literal,
+					},
+				}
+			}
+			// Could not parse — fall through to PAGE-like handling
+			return { action: null, description: assertMatch[2] }
+		}
 		return {
 			action: {
 				action: "assert",
@@ -216,6 +267,38 @@ export function parsePlanResponse(raw: string): PlannedStep[] {
 		})
 }
 
+/** Operator patterns for extracting comparison info from natural language. */
+const COMPARISON_PATTERNS: { pattern: RegExp; operator: string }[] = [
+	{ pattern: /greater\s+than\s+or\s+equal\s+to\s+(-?\d+\.?\d*)/, operator: "greater_or_equal" },
+	{ pattern: /less\s+than\s+or\s+equal\s+to\s+(-?\d+\.?\d*)/, operator: "less_or_equal" },
+	{ pattern: /greater\s+than\s+(-?\d+\.?\d*)/, operator: "greater_than" },
+	{ pattern: /more\s+than\s+(-?\d+\.?\d*)/, operator: "greater_than" },
+	{ pattern: /less\s+than\s+(-?\d+\.?\d*)/, operator: "less_than" },
+	{ pattern: /fewer\s+than\s+(-?\d+\.?\d*)/, operator: "less_than" },
+	{ pattern: /at\s+least\s+(-?\d+\.?\d*)/, operator: "greater_or_equal" },
+	{ pattern: /at\s+most\s+(-?\d+\.?\d*)/, operator: "less_or_equal" },
+	{ pattern: /equal(?:s)?\s+(?:to\s+)?(-?\d+\.?\d*)/, operator: "equal" },
+	{ pattern: /not\s+equal\s+(?:to\s+)?(-?\d+\.?\d*)/, operator: "not_equal" },
+]
+
+/**
+ * Extract comparison operator and literal number from a natural language
+ * step description (e.g. "the count of products is greater than 0").
+ * Returns null if no pattern matches.
+ */
+export function extractComparisonFromText(
+	text: string,
+): { operator: string; literal: string } | null {
+	const lower = text.toLowerCase()
+	for (const { pattern, operator } of COMPARISON_PATTERNS) {
+		const match = pattern.exec(lower)
+		if (match) {
+			return { operator, literal: match[1] }
+		}
+	}
+	return null
+}
+
 /**
  * Validate that every COMPARE in the plan references a REMEMBER that
  * appears earlier. Returns an array of error messages (empty if valid).
@@ -229,7 +312,7 @@ export function validatePlanReferences(plan: PlannedStep[]): string[] {
 			remembered.add(step.rememberAs)
 		}
 		const compare = step.compare ?? step.action?.compare
-		if (compare) {
+		if (compare && !("literal" in compare && compare.literal !== undefined)) {
 			const varName = compare.variable
 			if (!remembered.has(varName)) {
 				errors.push(

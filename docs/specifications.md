@@ -27,7 +27,19 @@ The AI driven execution engine that reads a step, observes the current state of 
 ### 1. Test Authoring
 
 #### 1.1 Plain-English Step Syntax
-Tests are written as ordered lists of plain-English instructions. The Pilot interprets intent, so exact phrasing is flexible, but the following patterns should be reliably understood:
+Tests are written as ordered lists of plain-language instructions. The Pilot interprets intent, so exact phrasing is flexible, but the following patterns should be reliably understood.
+
+**Language:** Step descriptions that reference page content (element labels, button text, headings, counts, etc.) must use the same language as the application under test. GreenLight uses keywords from step text to locate elements on the page — if the step says "products" but the page displays "produkter", the element will not be found. Structural keywords like "click", "check that", "greater than" can remain in English, but content words must match the page.
+
+```
+# Good — Swedish page, Swedish content words:
+- check that the count of produkter shown is greater than 0
+- click "Lägg i varukorg"
+
+# Bad — Swedish page, English content words:
+- check that the count of products shown is greater than 0
+- click "Add to cart"
+```
 
 **Navigation**
 ```
@@ -77,6 +89,16 @@ wait up to 10 seconds until "Dashboard" is visible
 #### 1.2 Assertions
 Assertions verify that the application is in the expected state. A failing assertion fails the test case.
 
+**Numeric comparisons:** Steps that compare a count or quantity against a specific number (e.g. "greater than 0", "at least 5") are supported natively. The descriptive words in the step must match the page language so the runtime can locate the value on the page.
+
+```
+# Numeric comparison examples:
+check that the count of produkter shown is greater than 0
+verify there are at least 5 resultat
+check that the number of artiklar equals 10
+```
+
+**Text assertions:**
 ```
 check that page contains "Welcome back, Jane"
 check that "Email" has value "jane@example.com"
