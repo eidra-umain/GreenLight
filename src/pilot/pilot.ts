@@ -258,9 +258,25 @@ export async function runTestCase(
 				mapAdapter: mapAdapter ?? undefined,
 			})
 
+			// Ask the LLM which picker group to target (it can see the a11y tree).
+			// The step text is e.g. "set the end time to..." and the tree has groups
+			// like "Start date and time", "End date and time".
+			let groupHint: string | undefined
+			try {
+				const groupStep = `Which date/time picker group on this page should be used for: "${step}"? Respond with ONLY the group name, nothing else.`
+				const groupAction = await llm.resolveStep(groupStep, state)
+				// The LLM returns a text action — extract the group name from the value or text
+				groupHint = groupAction.value ?? groupAction.text
+				if (globals.debug) {
+					console.log(`      [datepick] LLM group hint: "${groupHint ?? "none"}"`)
+				}
+			} catch {
+				// LLM couldn't help — fall through to fuzzy matching
+			}
+
 			try {
 				const t0 = performance.now()
-				const expandedSteps = resolveDatePick(step, state.a11yTree)
+				const expandedSteps = resolveDatePick(step, state.a11yTree, groupHint)
 				const duration = performance.now() - t0
 				trace.log("datepick:done", `${String(Math.round(duration))}ms → ${String(expandedSteps.length)} sub-steps`)
 
@@ -278,7 +294,7 @@ export async function runTestCase(
 				if (recorder) {
 					recorder.recordStep(
 						step,
-						{ action: "datepick", value: step },
+						{ action: "datepick", value: step, option: groupHint },
 						{ success: true, duration },
 						{ url: page.url(), title: await page.title() },
 					)

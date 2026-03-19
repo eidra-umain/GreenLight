@@ -5,6 +5,7 @@
  */
 
 import * as chrono from "chrono-node"
+import Fuse from "fuse.js"
 import type { A11yNode, Action } from "../reporter/types.js"
 import type { PlannedStep } from "./response-parser.js"
 import { globals } from "../globals.js"
@@ -88,9 +89,12 @@ function findNativeDateInput(nodes: A11yNode[], stepLower: string): A11yNode | n
  *
  * @param step The original step text (e.g. "set the start time to 10 minutes from now")
  * @param a11yTree The current page's accessibility tree
+ * @param groupHint Group name to target (e.g. "End date and time"). In pilot mode
+ *   this comes from the LLM which can see the page. In cached mode the groups
+ *   are the same as during discovery so matching by name is reliable.
  * @returns Array of pre-resolved PlannedSteps with type actions and refs
  */
-export function resolveDatePick(step: string, a11yTree: A11yNode[]): PlannedStep[] {
+export function resolveDatePick(step: string, a11yTree: A11yNode[], groupHint?: string): PlannedStep[] {
 	// Extract time expression if separated by "||"
 	// Format: "full step description||time expression"
 	let description = step
@@ -117,24 +121,34 @@ export function resolveDatePick(step: string, a11yTree: A11yNode[]): PlannedStep
 	// Strategy 1: Sectioned picker (MUI v7, etc.) — group with spinbuttons
 	const groups = findPickerGroups(a11yTree)
 	if (groups.length > 0) {
-		// Find the right group by matching step text against group name
 		let targetGroup = groups[0]
 		if (groups.length > 1) {
-			// Match step keywords against group names to find the right picker.
-			// Only match explicit start/end/begin/until words — avoid false
-			// positives from common words like "from" or "to".
-			const stepWords = stepLower.split(/\s+/)
-			for (const g of groups) {
-				const gLower = g.name.toLowerCase()
-				if (
-					(stepWords.includes("start") && gLower.includes("start")) ||
-					(stepWords.includes("end") && gLower.includes("end")) ||
-					(stepWords.includes("begin") && gLower.includes("start")) ||
-					(stepWords.includes("until") && gLower.includes("end"))
-				) {
-					targetGroup = g
-					break
+			if (groupHint) {
+				// Use the LLM-provided group hint (exact or fuzzy match)
+				const exact = groups.find((g) => g.name === groupHint)
+				if (exact) {
+					targetGroup = exact
+				} else {
+					const fuse = new Fuse(groups, { keys: ["name"], threshold: 0.6 })
+					const match = fuse.search(groupHint)
+					if (match.length > 0) targetGroup = match[0].item
 				}
+			} else {
+				// No hint — score each group by how many of its name words
+				// appear in the step description. This is more reliable than
+				// Fuse.js full-string matching because descriptions contain
+				// noise like "1 hour from now" that dilutes fuzzy scores.
+				let bestGroup = groups[0]
+				let bestScore = 0
+				for (const g of groups) {
+					const groupWords = g.name.toLowerCase().split(/\s+/).filter((w) => w.length > 2)
+					const score = groupWords.filter((w) => stepLower.includes(w)).length
+					if (score > bestScore) {
+						bestScore = score
+						bestGroup = g
+					}
+				}
+				targetGroup = bestGroup
 			}
 		}
 

@@ -172,7 +172,7 @@ describe("runTestCase", () => {
 				page,
 				{ name: "Screenshot test", steps: ['click "Greet"'] },
 				llm,
-				{ timeout: 5000, consoleDrain: drain },
+				{ timeout: 5000, consoleDrain: drain, screenshots: true },
 			)
 
 			expect(result.steps[0].screenshot).toBeDefined()

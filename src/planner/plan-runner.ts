@@ -438,7 +438,7 @@ export async function runCachedPlan(
 				const state = await capturePageState(page, consoleDrain, {
 					mapAdapter: mapAdapter ?? undefined,
 				})
-				const expandedSteps = resolveDatePick(step.value, state.a11yTree)
+				const expandedSteps = resolveDatePick(step.value, state.a11yTree, step.option)
 
 				if (globals.debug) {
 					console.log(`      [cached:datepick] Resolved "${step.value}" into ${String(expandedSteps.length)} actions`)

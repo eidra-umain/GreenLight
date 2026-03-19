@@ -91,8 +91,28 @@ describe("resolveDatePick — sectioned picker", () => {
 	})
 })
 
-describe("resolveDatePick — does not match 'from' to 'start'", () => {
-	it("'from now' does not select the start group for end steps", () => {
+describe("resolveDatePick — group hint from LLM", () => {
+	it("uses groupHint to select the correct group", () => {
+		const steps = resolveDatePick(
+			"set the end time to 1 hour from now||1 hour from now",
+			muiTree,
+			"End date and time",
+		)
+		const refs = steps.map((s) => s.action?.ref)
+		expect(refs).toEqual(["e6", "e7", "e8", "e9", "e10"])
+	})
+
+	it("fuzzy matches groupHint", () => {
+		const steps = resolveDatePick(
+			"set time||2026-06-15 14:30",
+			muiTree,
+			"End date",
+		)
+		const refs = steps.map((s) => s.action?.ref)
+		expect(refs).toEqual(["e6", "e7", "e8", "e9", "e10"])
+	})
+
+	it("without groupHint, fuzzy matches description against group names", () => {
 		const steps = resolveDatePick(
 			"set the end time to 1 hour from now||1 hour from now",
 			muiTree,

@@ -2,35 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.4.0] - 2026-03-18
+## [0.4.0] - 2026-03-19
 
-Unified page state, conditional steps, CLI and architecture improvements
+### Added
 
-**Architecture**: Unified page state representation
+- **Conditional if/then/else steps** — new `IF_VISIBLE`/`IF_CONTAINS`/`IF_URL` planner tokens for inline conditionals. Handle cookie banners, feature flags, and optional UI elements. CLI shows `[then]`/`[else]`/`[skipped]` tags. Both branches cacheable in heuristic plans with drift detection on branch switch.
+- **Date/time picker support** — new `DATEPICK` planner token with natural language time parsing ("10 minutes from now", "tomorrow at 3pm"). Automatically detects picker type: native HTML5 inputs, MUI v7 sectioned spinbuttons, or calendar popups. Dates are always computed fresh — cached runs get current timestamps, never stale ones.
+- **Remembered value assertions** — new `ASSERT_REMEMBERED` planner token checks that a previously remembered value appears on the page. Enables create/verify workflows: generate a random name, save it, then check it appears in a list.
+- **Random test data injection** — steps containing "random" get seeded with a truly random 6-digit number or a human-readable random string.
+- **Partial plan resume** — failed pilot runs save a partial plan. The next `--pilot` run replays cached steps (fast, no LLM), then switches to pilot mode for the remaining steps. Dramatically speeds up iterative test development.
 
-- Enriched a11y tree nodes with visible text, placeholder, and value from the DOM
-- LLM can now match fuzzy descriptions to elements (e.g. "password field" matches
-  textbox with placeholder "Enter visitor password")
+### Changed
 
-**Feature**: Conditional if/then/else steps
+- **Increased robustness with unified page state** — replaced the disconnected "Accessibility tree" + "Visible page text" dual-section LLM input with a single enriched tree where each element carries its a11y identity, visible text, placeholder, and input value together. 
+- **Text-based pilot response format** — replaced JSON response format with a simple text format (`click ref=e5`, `type ref=e3 value="hello"`, `assert contains_text "Welcome"`). Eliminates JSON syntax errors from LLMs and is easier for models to produce correctly.
+- **Spinbutton/date input typing** — executor detects `role="spinbutton"` and `type="date|datetime-local|time"` inputs and uses `fill()` instead of character-by-character typing, which doesn't work on MUI contentEditable spinbuttons.
 
-- New IF_VISIBLE/IF_CONTAINS/IF_URL planner tokens for inline conditionals
-- Condition evaluation uses the pilot LLM via the same conversation flow as
-  resolveStep (shared history, compact diffs, JSON action response format)
-- Both branches cacheable in heuristic plans; drift detected on branch switch
-- CLI shows [then]/[else]/[skipped] tags on conditional step output
-- New conditions.ts module for code-based evaluation (used in cached plan replay)
+### Fixed
 
-**Browser lifecycle fix**
-
-- Fixed Chromium crash dialog on macOS by SIGKILL via CDP SystemInfo.getProcessInfo
-  instead of Playwright's close() which triggers a SIGSEGV in Chrome 145 shutdown code
-
-**Documentation**
-
-- Added comprehensive "Writing test steps" section to README covering all action
-  types, enriched tree format, conditionals, form filling, assertions, map testing
-- Consolidated old "Test syntax" section into a quick-reference table
+- **Chromium crash dialog on macOS** — browser shutdown now uses CDP `SystemInfo.getProcessInfo` to get the Chrome PID and sends `SIGKILL` directly, bypassing Playwright's `close()` which triggered a SIGSEGV in Chrome 145's shutdown code.
+- **Friendly API key error** — missing `LLM_API_KEY` now shows a helpful message with setup instructions instead of a stack trace.
 
 ## [0.3.0] - 2026-03-18
 
