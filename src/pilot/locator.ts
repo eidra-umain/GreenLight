@@ -193,6 +193,47 @@ export async function resolveLocator(
 		}
 	}
 
+	// For nameless elements (e.g. bare checkboxes in table rows), try to
+	// scope via a named sibling in the same row/group. If the parent has
+	// children with names, use the closest named sibling as a scope.
+	if (!target.name && path.length > 1) {
+		const parent = path[path.length - 2]
+		if (parent.children) {
+			// Find a named sibling that can scope the search
+			for (const sibling of parent.children) {
+				if (sibling.ref === target.ref || !sibling.name) continue
+				// Use the sibling as a scope anchor via the parent row/group
+				try {
+					const siblingLocator = sibling.role === "text"
+						? page.getByText(sibling.name, { exact: true })
+						: page.getByRole(sibling.role as AriaRole, { name: sibling.name, exact: true })
+					// Find the parent container that holds both the sibling and the checkbox
+					const container = siblingLocator.locator("xpath=ancestor::tr | ancestor::*[contains(@class,'row')]").first()
+					const count = await container.count().catch(() => 0)
+					if (count > 0) {
+						const checkbox = container.getByRole(role).first()
+						if (await checkbox.isVisible().catch(() => false)) {
+							candidates.push(checkbox)
+							break
+						}
+					}
+				} catch { /* continue */ }
+			}
+		}
+
+		// Also try: nth-based disambiguation using the a11y tree order.
+		// Count how many same-role nameless siblings appear before this
+		// node in the parent's children to get the nth index.
+		if (parent.children) {
+			let nthIndex = 0
+			for (const sibling of parent.children) {
+				if (sibling.ref === target.ref) break
+				if (sibling.role === target.role && !sibling.name) nthIndex++
+			}
+			candidates.push(page.getByRole(role).nth(nthIndex))
+		}
+	}
+
 	// Try each candidate: return the first that matches exactly one element,
 	// or the first visible element when there are multiple matches.
 	for (const locator of candidates) {

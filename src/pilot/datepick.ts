@@ -120,15 +120,17 @@ export function resolveDatePick(step: string, a11yTree: A11yNode[]): PlannedStep
 		// Find the right group by matching step text against group name
 		let targetGroup = groups[0]
 		if (groups.length > 1) {
+			// Match step keywords against group names to find the right picker.
+			// Only match explicit start/end/begin/until words — avoid false
+			// positives from common words like "from" or "to".
+			const stepWords = stepLower.split(/\s+/)
 			for (const g of groups) {
 				const gLower = g.name.toLowerCase()
 				if (
-					(stepLower.includes("start") && gLower.includes("start")) ||
-					(stepLower.includes("end") && gLower.includes("end")) ||
-					(stepLower.includes("begin") && gLower.includes("start")) ||
-					(stepLower.includes("from") && gLower.includes("start")) ||
-					(stepLower.includes("to") && gLower.includes("end")) ||
-					(stepLower.includes("until") && gLower.includes("end"))
+					(stepWords.includes("start") && gLower.includes("start")) ||
+					(stepWords.includes("end") && gLower.includes("end")) ||
+					(stepWords.includes("begin") && gLower.includes("start")) ||
+					(stepWords.includes("until") && gLower.includes("end"))
 				) {
 					targetGroup = g
 					break

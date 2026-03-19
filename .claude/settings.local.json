@@ -13,7 +13,10 @@
       "Bash(npm link:*)",
       "Bash(node dist/cli/index.js run --help 2>&1)",
       "Bash(git checkout:*)",
-      "Bash(chmod +x dist/cli/index.js)"
+      "Bash(chmod +x dist/cli/index.js)",
+      "Bash(vitest)",
+      "Bash(jest)",
+      "Bash(mocha \")"
     ]
   }
 }

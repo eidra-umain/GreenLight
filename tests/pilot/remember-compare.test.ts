@@ -394,7 +394,7 @@ describe("validatePlanReferences", () => {
 describe("parseActionResponse — remember action", () => {
 	it("parses a remember action", () => {
 		const action = parseActionResponse(
-			'{"action":"remember","ref":"e15","rememberAs":"product_count"}',
+			'remember ref=e15 as="product_count"',
 		)
 		expect(action.action).toBe("remember")
 		expect(action.ref).toBe("e15")
@@ -405,7 +405,7 @@ describe("parseActionResponse — remember action", () => {
 describe("parseActionResponse — compare assertion", () => {
 	it("parses a compare assertion", () => {
 		const action = parseActionResponse(
-			'{"action":"assert","ref":"e15","assertion":{"type":"compare","expected":"product count"},"compare":{"variable":"count_before","operator":"less_than"}}',
+			'assert compare "product count" ref=e15 variable="count_before" operator="less_than"',
 		)
 		expect(action.action).toBe("assert")
 		expect(action.assertion).toEqual({
@@ -427,7 +427,7 @@ describe("parseActionResponse — compare assertion", () => {
 		]
 		for (const op of operators) {
 			const action = parseActionResponse(
-				`{"action":"assert","assertion":{"type":"compare","expected":"x"},"compare":{"variable":"v","operator":"${op}"}}`,
+				`assert compare "x" variable="v" operator="${op}"`,
 			)
 			expect(action.compare!.operator).toBe(op)
 		}
@@ -435,7 +435,7 @@ describe("parseActionResponse — compare assertion", () => {
 
 	it("parses a compare assertion with literal value", () => {
 		const action = parseActionResponse(
-			'{"action":"assert","ref":"e15","assertion":{"type":"compare","expected":"product count"},"compare":{"variable":"_","operator":"greater_than","literal":"0"}}',
+			'assert compare "product count" ref=e15 variable="_" operator="greater_than" literal="0"',
 		)
 		expect(action.compare).toEqual({
 			variable: "_",
@@ -444,9 +444,9 @@ describe("parseActionResponse — compare assertion", () => {
 		})
 	})
 
-	it("does not set literal when not present in JSON", () => {
+	it("does not set literal when not present", () => {
 		const action = parseActionResponse(
-			'{"action":"assert","assertion":{"type":"compare","expected":"x"},"compare":{"variable":"v","operator":"equal"}}',
+			'assert compare "x" variable="v" operator="equal"',
 		)
 		expect(action.compare!.literal).toBeUndefined()
 	})

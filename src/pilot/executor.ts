@@ -11,6 +11,7 @@ import type {
 	ResolvedSelector,
 } from "../reporter/types.js"
 import type { MapAdapter } from "../map/types.js"
+import Fuse from "fuse.js"
 import { globals } from "../globals.js"
 
 import {
@@ -52,60 +53,8 @@ export async function runWithNavigationHandling(
 }
 
 /**
- * Search the enriched a11y tree for a value matching the given keywords.
- * Checks node.value, node.visibleText, and node.name (in priority order).
- * Used as a fallback when the LLM returns a remember action without
- * specifying a target element.
+ * Flatten an a11y node tree into a flat array.
  */
-function findValueInTree(nodes: A11yNode[], keywords: string[]): string {
-	const lowerKeywords = keywords.map((k) => k.toLowerCase())
-
-	function score(text: string): number {
-		const lower = text.toLowerCase()
-		return lowerKeywords.filter((kw) => lower.includes(kw)).length
-	}
-
-	// Strategy: find nodes where the name/label matches keywords,
-	// then return their VALUE (not the label). This handles the common
-	// pattern: keywords "booking name" match the label "Booking name"
-	// on an input with value "Booking123" — we want "Booking123".
-	let bestNode: A11yNode | null = null
-	let bestScore = 0
-
-	function walk(nodeList: A11yNode[]): void {
-		for (const node of nodeList) {
-			// Score against the node's label/name
-			const nameScore = node.name ? score(node.name) : 0
-			if (nameScore > bestScore) {
-				bestScore = nameScore
-				bestNode = node
-			}
-			if (node.children) walk(node.children)
-		}
-	}
-
-	walk(nodes)
-
-	// If the best-matching node has a value (input field), return that.
-	// Otherwise return the node's visibleText or name.
-	if (bestNode) {
-		const n = bestNode as A11yNode
-		if (n.value) return n.value
-		if (n.visibleText) return n.visibleText
-		return n.name
-	}
-
-	// No keyword match — return the first non-empty value field.
-	// Useful when the step says "remember the name" and the tree has
-	// exactly one input with a recently typed value.
-	for (const node of flattenNodes(nodes)) {
-		if (node.value) return node.value
-	}
-
-	return ""
-}
-
-/** Flatten an a11y node tree into a flat array. */
 function flattenNodes(nodes: A11yNode[]): A11yNode[] {
 	const result: A11yNode[] = []
 	function walk(list: A11yNode[]): void {
@@ -116,6 +65,57 @@ function flattenNodes(nodes: A11yNode[]): A11yNode[] {
 	}
 	walk(nodes)
 	return result
+}
+
+/**
+ * Search the enriched a11y tree for a value matching a query string.
+ * Uses Fuse.js fuzzy matching against node name, placeholder, visibleText,
+ * and value. When the best match is an input with a value, returns the
+ * value (what was typed) rather than the label.
+ *
+ * Used as a fallback when the LLM returns a remember action without
+ * specifying a target element.
+ */
+function findValueInTree(nodes: A11yNode[], keywords: string[]): string {
+	const flat = flattenNodes(nodes).filter((n) => !n.ref.startsWith("_"))
+	if (flat.length === 0) return ""
+
+	const query = keywords.join(" ")
+
+	const fuse = new Fuse(flat, {
+		keys: [
+			{ name: "name", weight: 2 },
+			{ name: "placeholder", weight: 1.5 },
+			{ name: "visibleText", weight: 1 },
+			{ name: "value", weight: 0.5 },
+		],
+		threshold: 0.4,
+		includeScore: true,
+	})
+
+	const results = fuse.search(query)
+
+	if (globals.debug && results.length > 0) {
+		console.log(`      [remember] Fuse.js top matches for "${query}":`)
+		for (const r of results.slice(0, 3)) {
+			console.log(`        - [${r.item.ref}] "${r.item.name}" value="${r.item.value ?? ""}" (score: ${String(r.score?.toFixed(3))})`)
+		}
+	}
+
+	if (results.length > 0) {
+		const best = results[0].item
+		// Prefer the input value (what was typed) over the label
+		if (best.value) return best.value
+		if (best.visibleText) return best.visibleText
+		return best.name
+	}
+
+	// No fuzzy match — return the first non-empty value field
+	for (const node of flat) {
+		if (node.value) return node.value
+	}
+
+	return ""
 }
 
 /**

@@ -29,88 +29,91 @@ export interface PlannedStep {
 	inputStepIndex?: number
 }
 
-/** Parse a JSON string from the LLM into a validated Action. */
+const VALID_ACTIONS = new Set([
+	"click", "check", "uncheck", "type", "select", "autocomplete",
+	"scroll", "navigate", "press", "wait", "assert", "remember",
+])
+
+/**
+ * Extract a named parameter value from a text action line.
+ * Supports: key=value and key="quoted value with spaces"
+ */
+function extractParam(line: string, key: string): string | undefined {
+	// key="quoted value"
+	const quotedRe = new RegExp(`${key}="([^"]*)"`)
+	const quotedMatch = quotedRe.exec(line)
+	if (quotedMatch) return quotedMatch[1]
+	// key=unquotedValue
+	const bareRe = new RegExp(`${key}=(\\S+)`)
+	const bareMatch = bareRe.exec(line)
+	if (bareMatch) return bareMatch[1]
+	return undefined
+}
+
+/**
+ * Parse a text-format action line from the LLM into a validated Action.
+ *
+ * Format: ACTION [ref=REF] [text="TEXT"] [value="VALUE"] [option="OPTION"] [as="VAR"]
+ * Assert:  assert TYPE "EXPECTED" [ref=REF] [variable="VAR" operator="OP"] [literal="N"]
+ *
+ * Also accepts JSON as a fallback for backward compatibility.
+ */
 export function parseActionResponse(raw: string): Action {
-	// Strip markdown code fences if the LLM wraps in ```json
 	let cleaned = raw.trim()
+	// Strip markdown code fences
 	if (cleaned.startsWith("```")) {
-		cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "")
+		cleaned = cleaned.replace(/^```(?:\w*)?\s*/, "").replace(/\s*```$/, "")
 	}
 
-	let parsed: unknown
-	try {
-		parsed = JSON.parse(cleaned)
-	} catch {
-		throw new Error(`LLM returned invalid JSON: ${raw}`)
+	// Text format parsing
+	const parts = cleaned.split(/\s+/)
+	const actionType = parts[0]?.toLowerCase()
+
+	if (!actionType || !VALID_ACTIONS.has(actionType)) {
+		throw new Error(`LLM returned unknown action "${parts[0] ?? ""}": ${raw}`)
 	}
 
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-		throw new Error(`LLM returned non-object JSON: ${raw}`)
-	}
+	const action: Action = { action: actionType }
 
-	const obj = parsed as Record<string, unknown>
+	if (actionType === "assert") {
+		// assert TYPE "EXPECTED" [ref=REF] [variable="VAR" operator="OP"] [literal="N"]
+		const assertType = parts[1]
+		if (!assertType) throw new Error(`assert missing type: ${raw}`)
 
-	if (typeof obj.action !== "string" || obj.action.length === 0) {
-		throw new Error(`LLM response missing "action" field: ${raw}`)
-	}
+		// Extract the quoted expected value
+		const quotedMatch = /"([^"]*)"/.exec(cleaned.slice(cleaned.indexOf(assertType) + assertType.length))
+		const expected = quotedMatch?.[1] ?? ""
 
-	const VALID_ACTIONS = [
-		"click",
-		"check",
-		"uncheck",
-		"type",
-		"select",
-		"autocomplete",
-		"scroll",
-		"navigate",
-		"press",
-		"wait",
-		"assert",
-		"remember",
-	]
+		action.assertion = { type: assertType, expected }
 
-	if (!VALID_ACTIONS.includes(obj.action)) {
-		throw new Error(
-			`LLM returned unknown action "${obj.action}". Valid: ${VALID_ACTIONS.join(", ")}`,
-		)
-	}
-
-	const action: Action = { action: obj.action }
-
-	if (typeof obj.ref === "string") {
-		action.ref = obj.ref
-	}
-	if (typeof obj.text === "string") {
-		action.text = obj.text
-	}
-	if (typeof obj.value === "string") {
-		action.value = obj.value
-	}
-	if (typeof obj.option === "string") {
-		action.option = obj.option
-	}
-	if (typeof obj.rememberAs === "string") {
-		action.rememberAs = obj.rememberAs
-	}
-	if (typeof obj.compare === "object" && obj.compare !== null) {
-		const c = obj.compare as Record<string, unknown>
-		if (typeof c.variable === "string" && typeof c.operator === "string") {
+		// Extract compare fields if present
+		const variable = extractParam(cleaned, "variable")
+		const operator = extractParam(cleaned, "operator")
+		if (variable && operator) {
 			action.compare = {
-				variable: c.variable,
-				operator: c.operator as Action["compare"] extends { operator: infer O } ? O : never,
-				...(typeof c.literal === "string" ? { literal: c.literal } : {}),
+				variable,
+				operator: operator as Action["compare"] extends { operator: infer O } ? O : never,
 			}
+			const literal = extractParam(cleaned, "literal")
+			if (literal) action.compare.literal = literal
 		}
-	}
-	if (typeof obj.assertion === "object" && obj.assertion !== null) {
-		const a = obj.assertion as Record<string, unknown>
-		if (typeof a.type === "string" && typeof a.expected === "string") {
-			action.assertion = { type: a.type, expected: a.expected }
-		}
+
+		// ref for compare assertions
+		action.ref = extractParam(cleaned, "ref")
+	} else if (actionType === "remember") {
+		action.ref = extractParam(cleaned, "ref")
+		action.text = extractParam(cleaned, "text")
+		action.rememberAs = extractParam(cleaned, "as")
+	} else {
+		action.ref = extractParam(cleaned, "ref")
+		action.text = extractParam(cleaned, "text")
+		action.value = extractParam(cleaned, "value")
+		action.option = extractParam(cleaned, "option")
 	}
 
 	return action
 }
+
 
 /**
  * Parse a single action token from the plan response line format.

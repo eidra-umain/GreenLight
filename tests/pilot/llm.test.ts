@@ -75,69 +75,85 @@ describe("buildMessages", () => {
 })
 
 describe("parseActionResponse", () => {
-	it("parses a click action", () => {
-		const action = parseActionResponse('{"action":"click","ref":"e5"}')
+	it("throws on unknown action", () => {
+		expect(() => parseActionResponse("bogus ref=e1")).toThrow(
+			'unknown action "bogus"',
+		)
+	})
+
+	it("throws on empty input", () => {
+		expect(() => parseActionResponse("")).toThrow()
+	})
+
+	it("parses click ref=e5", () => {
+		const action = parseActionResponse("click ref=e5")
 		expect(action).toEqual({ action: "click", ref: "e5" })
 	})
 
-	it("parses a type action with value", () => {
-		const action = parseActionResponse(
-			'{"action":"type","ref":"e3","value":"jane@example.com"}',
-		)
-		expect(action).toEqual({
-			action: "type",
-			ref: "e3",
-			value: "jane@example.com",
-		})
+	it("parses text format: click text=\"About us\"", () => {
+		const action = parseActionResponse('click text="About us"')
+		expect(action).toEqual({ action: "click", text: "About us" })
 	})
 
-	it("parses an assert action with assertion", () => {
-		const action = parseActionResponse(
-			'{"action":"assert","assertion":{"type":"contains_text","expected":"Welcome"}}',
-		)
-		expect(action).toEqual({
-			action: "assert",
-			assertion: { type: "contains_text", expected: "Welcome" },
-		})
+	it("parses text format: type with value", () => {
+		const action = parseActionResponse('type ref=e3 value="jane@example.com"')
+		expect(action).toEqual({ action: "type", ref: "e3", value: "jane@example.com" })
 	})
 
-	it("parses a navigate action", () => {
-		const action = parseActionResponse(
-			'{"action":"navigate","value":"/products"}',
-		)
+	it("parses text format: select with value", () => {
+		const action = parseActionResponse('select ref=e8 value="Canada"')
+		expect(action).toEqual({ action: "select", ref: "e8", value: "Canada" })
+	})
+
+	it("parses text format: autocomplete with option", () => {
+		const action = parseActionResponse('autocomplete ref=e4 value="foo" option="foobar inc"')
+		expect(action).toEqual({ action: "autocomplete", ref: "e4", value: "foo", option: "foobar inc" })
+	})
+
+	it("parses text format: remember with as=", () => {
+		const action = parseActionResponse('remember ref=e15 as="product_count"')
+		expect(action).toEqual({ action: "remember", ref: "e15", rememberAs: "product_count" })
+	})
+
+	it("parses text format: assert contains_text", () => {
+		const action = parseActionResponse('assert contains_text "Welcome back"')
+		expect(action.action).toBe("assert")
+		expect(action.assertion).toEqual({ type: "contains_text", expected: "Welcome back" })
+	})
+
+	it("parses text format: assert element_visible", () => {
+		const action = parseActionResponse('assert element_visible "Submit"')
+		expect(action.assertion).toEqual({ type: "element_visible", expected: "Submit" })
+	})
+
+	it("parses text format: assert compare with variable", () => {
+		const action = parseActionResponse('assert compare "product count" ref=e15 variable="count_before" operator="less_than"')
+		expect(action.assertion?.type).toBe("compare")
+		expect(action.compare?.variable).toBe("count_before")
+		expect(action.compare?.operator).toBe("less_than")
+		expect(action.ref).toBe("e15")
+	})
+
+	it("parses text format: assert compare with literal", () => {
+		const action = parseActionResponse('assert compare "count" ref=e15 variable="_" operator="greater_than" literal="0"')
+		expect(action.compare).toEqual({ variable: "_", operator: "greater_than", literal: "0" })
+	})
+
+	it("parses text format: navigate", () => {
+		const action = parseActionResponse('navigate value="/products"')
 		expect(action).toEqual({ action: "navigate", value: "/products" })
 	})
 
-	it("strips markdown code fences", () => {
-		const action = parseActionResponse(
-			'```json\n{"action":"click","ref":"e1"}\n```',
-		)
-		expect(action).toEqual({ action: "click", ref: "e1" })
+	it("parses text format: press", () => {
+		const action = parseActionResponse('press value="Enter"')
+		expect(action).toEqual({ action: "press", value: "Enter" })
 	})
 
-	it("throws on invalid JSON", () => {
-		expect(() => parseActionResponse("not json")).toThrow(
-			"LLM returned invalid JSON",
-		)
+	it("parses text format: scroll", () => {
+		const action = parseActionResponse('scroll value="down"')
+		expect(action).toEqual({ action: "scroll", value: "down" })
 	})
 
-	it("throws on non-object JSON", () => {
-		expect(() => parseActionResponse('"hello"')).toThrow(
-			"LLM returned non-object JSON",
-		)
-	})
-
-	it("throws on missing action field", () => {
-		expect(() => parseActionResponse('{"ref":"e1"}')).toThrow(
-			'missing "action" field',
-		)
-	})
-
-	it("throws on unknown action type", () => {
-		expect(() => parseActionResponse('{"action":"hover","ref":"e1"}')).toThrow(
-			'unknown action "hover"',
-		)
-	})
 })
 
 describe("resolveApiKey", () => {
@@ -216,7 +232,7 @@ describe("resolveLLMConfig", () => {
 describe("createLLMClient", () => {
 	it("sends correct request and parses response", async () => {
 		const provider = createMockProvider(
-			() => '{"action":"click","ref":"e3"}',
+			() => "click ref=e3",
 		)
 
 		const client = createLLMClient({
@@ -323,8 +339,8 @@ describe("createLLMClient", () => {
 			chatCompletion: vi.fn().mockImplementation(() => {
 				callCount++
 				if (callCount === 1)
-					return Promise.resolve('{"action":"click","ref":"e1"}')
-				return Promise.resolve('{"action":"click","ref":"e2"}')
+					return Promise.resolve("click ref=e1")
+				return Promise.resolve("click ref=e2")
 			}),
 		}
 
@@ -351,7 +367,7 @@ describe("createLLMClient", () => {
 
 	it("returns cached result for identical step and page state", async () => {
 		const provider = createMockProvider(
-			() => '{"action":"click","ref":"e1"}',
+			() => "click ref=e1",
 		)
 
 		const client = createLLMClient({
@@ -375,8 +391,8 @@ describe("createLLMClient", () => {
 			chatCompletion: vi.fn().mockImplementation(() => {
 				callCount++
 				if (callCount === 1)
-					return Promise.resolve('{"action":"click","ref":"e1"}')
-				return Promise.resolve('{"action":"click","ref":"e5"}')
+					return Promise.resolve("click ref=e1")
+				return Promise.resolve("click ref=e5")
 			}),
 		}
 
@@ -399,7 +415,7 @@ describe("createLLMClient", () => {
 
 	it("clears history on resetHistory", async () => {
 		const provider = createMockProvider(
-			() => '{"action":"click","ref":"e1"}',
+			() => "click ref=e1",
 		)
 
 		const client = createLLMClient({
@@ -426,7 +442,7 @@ describe("createLLMClient", () => {
 				callCount++
 				if (callCount === 1)
 					return Promise.resolve('PAGE "click something"')
-				return Promise.resolve('{"action":"click","ref":"e1"}')
+				return Promise.resolve("click ref=e1") // text format
 			}),
 		}
 

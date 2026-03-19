@@ -13,7 +13,7 @@ describe("loadSuite", () => {
 	it("loads and parses a valid suite", async () => {
 		const suite = await loadSuite(fixture("valid-suite.yaml"))
 		expect(suite.suite).toBe("Test Suite")
-		expect(suite.base_url).toBe("https://example.com")
+		// base_url was removed from suite schema — now only in greenlight.yaml
 		expect(suite.viewport).toEqual({ width: 1024, height: 768 })
 		expect(suite.tests).toHaveLength(2)
 	})
@@ -56,10 +56,10 @@ describe("loadSuite", () => {
 		).rejects.toThrow()
 	})
 
-	it("rejects a suite with invalid URL", async () => {
-		await expect(
-			loadSuite(fixture("invalid-bad-url.yaml")),
-		).rejects.toThrow()
+	it("accepts a suite with invalid URL (base_url removed from suite schema)", async () => {
+		// base_url is no longer validated in suite YAML — it's in greenlight.yaml
+		const suite = await loadSuite(fixture("invalid-bad-url.yaml"))
+		expect(suite.suite).toBeDefined()
 	})
 
 	it("throws on nonexistent file", async () => {

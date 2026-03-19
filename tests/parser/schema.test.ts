@@ -32,10 +32,10 @@ describe("SuiteSchema", () => {
 		expect(() => SuiteSchema.parse(noName)).toThrow()
 	})
 
-	it("rejects invalid base_url", () => {
-		expect(() =>
-			SuiteSchema.parse({ ...minimal, base_url: "not-a-url" }),
-		).toThrow()
+	it("ignores unknown fields like base_url (removed from suite schema)", () => {
+		// base_url was removed from suite schema — it's now only in greenlight.yaml
+		const result = SuiteSchema.parse({ ...minimal, base_url: "not-a-url" })
+		expect(result.suite).toBe("Test")
 	})
 
 	it("rejects empty tests array", () => {

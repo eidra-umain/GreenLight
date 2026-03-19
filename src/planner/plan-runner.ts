@@ -15,6 +15,7 @@ import { extractQuotedText } from "../pilot/locator.js"
 import { evaluateCondition } from "../pilot/conditions.js"
 import { resolveDatePick } from "../pilot/datepick.js"
 import { capturePageState } from "../pilot/state.js"
+import { hydratePlaceholders } from "../pilot/random.js"
 import { globals } from "../globals.js"
 
 type AriaRole = Parameters<Page["getByRole"]>[0]
@@ -77,7 +78,9 @@ async function executeHeuristicStep(
 				if (!step.value) throw new Error("type step requires a value")
 				if (!step.selector) throw new Error("type step requires a selector")
 				const locator = buildLocator(page, step.selector, hintText)
-				await locator.fill(step.value)
+				// Hydrate random placeholders with fresh values on each replay
+				const typeValue = hydratePlaceholders(step.value)
+				await locator.fill(typeValue)
 				break
 			}
 
@@ -216,7 +219,8 @@ async function executeHeuristicStep(
 				let capturedText = ""
 				if (step.selector) {
 					const locator = buildLocator(page, step.selector, hintText)
-					capturedText = (await locator.textContent() ?? "").trim()
+					// Try inputValue() first (for inputs/textareas), fall back to textContent
+					capturedText = (await locator.inputValue().catch(() => null) ?? await locator.textContent() ?? "").trim()
 					// If the variable name implies a number but the captured text
 					// has none, the stored selector likely points to a nearby
 					// element (e.g. a heading instead of the count). Fall back to

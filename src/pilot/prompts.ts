@@ -45,7 +45,7 @@ export const SYSTEM_PROMPT = `You are The Pilot, an AI agent that executes end-t
 
 You receive a plain-English test step and the current page state.
 Your job is to determine the SINGLE browser action needed to execute the step.
-Respond with ONLY a JSON object. No markdown, no explanation.
+Respond with ONLY a single action line in the text format described below. No markdown, no explanation, no JSON.
 
 ═══ Page state ═══
 
@@ -127,25 +127,35 @@ map_state "expected" examples:
 - "zoom level is at least 10"
 - "layer hospitals is visible"
 
+═══ Response format ═══
+
+One line. Format: ACTION [ref=REF] [text="TEXT"] [value="VALUE"] [option="OPTION"] [as="VAR"]
+
+For assertions: assert TYPE "EXPECTED" [ref=REF] [variable="VAR" operator="OP"] [literal="N"]
+
 ═══ Examples ═══
 
-{"action":"click","ref":"e5"}
-{"action":"click","text":"About us"}
-{"action":"type","ref":"e3","value":"jane@example.com"}
-{"action":"select","ref":"e8","value":"Canada"}
-{"action":"autocomplete","ref":"e4","value":"foo"}
-{"action":"autocomplete","ref":"e4","value":"foo","option":"foobar inc"}
-{"action":"check","ref":"e12"}
-{"action":"navigate","value":"/products"}
-{"action":"press","value":"Enter"}
-{"action":"remember","ref":"e15","rememberAs":"product_count"}
-{"action":"assert","assertion":{"type":"contains_text","expected":"Welcome back"}}
-{"action":"assert","assertion":{"type":"compare","expected":"product count"},"compare":{"variable":"product_count","operator":"less_than"},"ref":"e15"}
-{"action":"assert","assertion":{"type":"compare","expected":"product count"},"compare":{"variable":"_","operator":"greater_than","literal":"0"},"ref":"e15"}
-{"action":"assert","assertion":{"type":"element_disabled","expected":"Submit"}}
-{"action":"assert","assertion":{"type":"element_enabled","expected":"Submit"}}
-{"action":"assert","assertion":{"type":"map_state","expected":"map shows \\"Stockholm\\""}}
-{"action":"scroll","value":"down"}
+click ref=e5
+click text="About us"
+type ref=e3 value="jane@example.com"
+select ref=e8 value="Canada"
+autocomplete ref=e4 value="foo"
+autocomplete ref=e4 value="foo" option="foobar inc"
+check ref=e12
+uncheck ref=e12
+navigate value="/products"
+press value="Enter"
+scroll value="down"
+remember ref=e15 as="product_count"
+assert contains_text "Welcome back"
+assert element_visible "Submit"
+assert element_not_visible "Error"
+assert element_disabled "Submit"
+assert element_enabled "Submit"
+assert url_contains "/products"
+assert compare "product count" ref=e15 variable="product_count" operator="less_than"
+assert compare "product count" ref=e15 variable="_" operator="greater_than" literal="0"
+assert map_state "map shows Stockholm"
 `
 
 // ─────────────────────────────────────────────────────────────────────
@@ -196,8 +206,15 @@ Rules:
 - Assertions about a button being disabled or enabled with a quoted button name → assert element_disabled / assert element_enabled with the button text.
 - Assertions that compare against a previously remembered value (e.g. "check that the count decreased", "verify the price is less than before") → COMPARE with a matching REMEMBER.
 - Assertions WITHOUT quoted strings and without numeric comparisons describe something conceptual (e.g. "check that the page contains a Leads form"). These CANNOT be pre-resolved. Output PAGE with the full step as description.
-- NEVER split assertion steps. A single assertion = a single output line. If the step contains a quoted string, the assert contains_text is sufficient — if the text is present, the container is implicitly visible.
+- A pure assertion = a single output line. Do NOT split "check that the drawer opens and contains 'Hello'" — the assert covers it.
   "Verify that the drawer opens and contains the text \\"Hello\\"" → assert contains_text "Hello"
+- BUT when a step combines an assertion AND an interaction (e.g. "check X and click Y", "verify X is enabled and click it"), ALWAYS split into separate lines: one assertion + one interaction.
+  "check that there is a dialog and click 'Yes'" → two lines:
+    PAGE "check that there is a dialog"
+    PAGE "click 'Yes'"
+  "check that the 'Cancel' button is enabled and click it" → two lines:
+    assert element_enabled "Cancel"
+    PAGE "click 'Cancel'"
 - For assertions that CAN be resolved, preserve the FULL expected text exactly as written. Never truncate or shorten it.
 - Steps that require seeing the page to identify interactive elements → PAGE with a description.
 - References to earlier steps: When a step uses pronouns like "that form", resolve them using context from earlier steps.

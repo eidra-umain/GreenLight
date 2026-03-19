@@ -17,6 +17,7 @@ import type { LLMClient } from "./llm.js"
 import type { PlannedStep } from "./response-parser.js"
 import { validatePlanReferences } from "./response-parser.js"
 import { resolveDatePick } from "./datepick.js"
+import { stepNeedsRandom, injectRandomValues, replaceWithPlaceholders, type RandomValues } from "./random.js"
 import { capturePageState } from "./state.js"
 import { resetRefCounter } from "./a11y-parser.js"
 import { executeAction } from "./executor.js"
@@ -356,6 +357,19 @@ export async function runTestCase(
 			postCapture: 0,
 		}
 
+		// Inject random values into steps that mention "random"
+		let randomValues: RandomValues | null = null
+		let resolveStep = step
+		if (!plannedAction && stepNeedsRandom(step)) {
+			const injected = injectRandomValues(step)
+			resolveStep = injected.step
+			randomValues = injected.values
+			if (globals.debug) {
+				console.log(`      [random] Injected: number="${randomValues.number}", string="${randomValues.string}"`)
+				console.log(`      [random] Step prompt: ${resolveStep}`)
+			}
+		}
+
 		try {
 			let a11yTree: A11yNode[] = []
 
@@ -391,7 +405,7 @@ export async function runTestCase(
 
 				trace.log("llm:start")
 				t0 = performance.now()
-				action = await llm.resolveStep(step, state)
+				action = await llm.resolveStep(resolveStep, state)
 				timing.llm = performance.now() - t0
 				trace.log(
 					"llm:done",
@@ -505,7 +519,12 @@ export async function runTestCase(
 			// Skip for datepick sub-steps — the datepick marker was already
 			// recorded and will be re-expanded with fresh timestamps on replay.
 			if (recorder && !insideDatePick) {
-				recorder.recordStep(step, action, result, {
+				// Replace random values with placeholders so cached runs
+				// generate fresh random values on replay.
+				const recordAction = randomValues && action.value
+					? { ...action, value: replaceWithPlaceholders(action.value, randomValues) }
+					: action
+				recorder.recordStep(step, recordAction, result, {
 					url: postState.url,
 					title: postState.title,
 				})

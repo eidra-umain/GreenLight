@@ -47,10 +47,12 @@ function printStepResult(stepResult: StepResult): void {
 	const phases = t
 		? ` \x1b[90m[capture:${String(Math.round(t.capture))} llm:${String(Math.round(t.llm))} exec:${String(Math.round(t.execute))} post:${String(Math.round(t.postCapture))}ms]\x1b[0m`
 		: ""
+	// Strip internal "||" separator from datepick step names
+	const stepName = stepResult.step.includes("||") ? stepResult.step.split("||")[0] : stepResult.step
 	const condTag = stepResult.conditionResult
 		? ` \x1b[90m[${stepResult.conditionResult.branch}]\x1b[0m`
 		: ""
-	console.log(`    ${icon} ${stepResult.step} (${dur})${phases}${condTag}`)
+	console.log(`    ${icon} ${stepName} (${dur})${phases}${condTag}`)
 	if (stepResult.error) {
 		console.log(`      \x1b[31m${stepResult.error}\x1b[0m`)
 	}
