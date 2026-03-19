@@ -131,7 +131,7 @@ export async function executeAction(
 			}
 
 			case "type": {
-				if (!action.value) {
+				if (action.value == null) {
 					throw new Error("type action requires a value")
 				}
 				const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
@@ -198,6 +198,89 @@ export async function executeAction(
 						await page.keyboard.press(selectAll)
 						await page.keyboard.press("Backspace")
 						await page.keyboard.type(action.value, { delay: 30 })
+					}
+				}
+				break
+			}
+
+			case "clear": {
+				const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
+				resolvedSelector = await extractSelectorInfo(
+					page,
+					action,
+					a11yTree,
+					locator,
+				)
+
+				// Determine the element type and apply the right clearing strategy.
+				const tagName = await locator.evaluate((el) => el.tagName.toLowerCase()).catch(() => "")
+				const elRole = await locator.getAttribute("role").catch(() => null)
+				const isInput = tagName === "input" || tagName === "textarea" || elRole === "textbox" || elRole === "combobox"
+
+				if (isInput) {
+					// Text input: focus, select all, delete
+					await locator.click({ force: true })
+					const selectAll = process.platform === "darwin" ? "Meta+a" : "Control+a"
+					await page.keyboard.press(selectAll)
+					await page.keyboard.press("Backspace")
+					if (globals.debug) {
+						console.log(`      [clear] Cleared text input via select-all + backspace`)
+					}
+				} else {
+					// Non-input element (filter chip, dropdown, multi-select, etc.):
+					// look for a clear/remove/close button within or nearby.
+					const clearButton = await locator.evaluate((el) => {
+						// Common clear button patterns — search within the element
+						// and its parent for buttons that clear/reset/remove.
+						const candidates = [
+							...Array.from(el.querySelectorAll("button, [role='button']")),
+							// Also check siblings (clear button may be next to the element)
+							...Array.from(el.parentElement?.querySelectorAll("button, [role='button']") ?? []),
+						]
+						const clearPatterns = /\b(clear|close|remove|delete|reset|rensa|ta bort|×|✕|✖|🗙)\b/i
+						for (const btn of candidates) {
+							const label = btn.getAttribute("aria-label") ?? ""
+							const text = btn.textContent ?? ""
+							const title = btn.getAttribute("title") ?? ""
+							if (clearPatterns.test(label) || clearPatterns.test(text) || clearPatterns.test(title)) {
+								// Return a selector path to the button
+								return true
+							}
+						}
+						return false
+					})
+
+					if (clearButton) {
+						// Re-find and click the clear button via Playwright locator
+						// (can't click from evaluate). Search inside first, then parent.
+						const inner = locator.locator("button, [role='button']")
+						const parent = locator.locator("..")
+						const parentButtons = parent.locator("button, [role='button']")
+						const allButtons = [
+							...(await inner.all()),
+							...(await parentButtons.all()),
+						]
+						const clearPatterns = /\b(clear|close|remove|delete|reset|rensa|ta bort|×|✕|✖|🗙)\b/i
+						for (const btn of allButtons) {
+							const label = await btn.getAttribute("aria-label").catch(() => "") ?? ""
+							const text = await btn.textContent().catch(() => "") ?? ""
+							const title = await btn.getAttribute("title").catch(() => "") ?? ""
+							if (clearPatterns.test(label) || clearPatterns.test(text) || clearPatterns.test(title)) {
+								await btn.click()
+								if (globals.debug) {
+									console.log(`      [clear] Clicked clear button: "${(label || text || title).trim()}"`)
+								}
+								break
+							}
+						}
+					} else {
+						// Last resort: try clicking the element itself (some toggles
+						// deselect on click) or select-all + backspace if it's
+						// contentEditable.
+						await locator.click()
+						if (globals.debug) {
+							console.log(`      [clear] No clear button found, clicked element directly`)
+						}
 					}
 				}
 				break

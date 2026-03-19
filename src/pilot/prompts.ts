@@ -81,10 +81,13 @@ Example:
 
 - click: Click an element. Requires "ref" or "text".
 - check / uncheck: Toggle a checkbox. Requires "ref" or "text". Use instead of click for checkboxes.
-- type: Type text into an input. Requires "ref" or "text", and "value". 
-  When the step means to type "a string", "some test data", or similar, generate realistic values yourself 
+- type: Type text into an input. Requires "ref" or "text", and "value".
+  When the step means to type "a string", "some test data", or similar, generate realistic values yourself
   that matches the field name and use it as the value. If the step literally says "random string" or "random number"
   make up a fully random string or integer number that does not need to match the field name.
+- clear: Clear a field, filter, selection, or tag input. Requires "ref" or "text" to identify the element.
+  Works for text inputs (select-all + delete), filter chips with clear/remove buttons, dropdowns with reset buttons, and multi-select tag inputs.
+  The runtime automatically detects the element type and finds the appropriate clear mechanism. Use this for any step that says "clear", "reset", or "remove" a field or filter.
 - For date/time inputs: when the step uses relative time expressions like "now plus 1 hour", "tomorrow", or "next week",
   compute the actual date/time value from the current time provided in the page state. 
   Format dates as the input expects (check the placeholder or input type — common formats: 
@@ -152,6 +155,8 @@ check ref=e12
 uncheck ref=e12
 navigate value="/products"
 press value="Enter"
+clear ref=e19
+clear text="Välj tjänst"
 scroll value="down"
 scroll value="top"
 scroll ref=e15
@@ -211,6 +216,7 @@ IMPORTANT: Prefix every output line with the input step number it came from, usi
 - press "key"
 - scroll "up|down|top|bottom" — scroll the page in a direction, or to the top/bottom.
 - PAGE "scroll to ..." — scroll a specific element into view. Needs the live page to identify the element.
+- PAGE "clear ..." — clear a field, filter, selection, or tag input. Needs the live page to identify the element and its clear mechanism. Use for steps that say "clear", "reset", or "remove" a field, filter, or selection.
 
 ═══ Splitting steps ═══
 
@@ -236,6 +242,12 @@ Rules:
 - Steps that require seeing the page to identify interactive elements → PAGE with a description.
 - References to earlier steps: When a step uses pronouns like "that form", resolve them using context from earlier steps.
 - IMPORTANT: Each output line must describe exactly ONE atomic interaction. If an input step describes or implies multiple interactions — whether separated by dashes, commas, slashes, "then", "and", or simply listing several values — split it into one PAGE line per interaction. Always err on the side of splitting.
+  "enter '70210' in the search field and submit" → two lines:
+    PAGE "enter '70210' in the search field"
+    PAGE "submit the search (press Enter or click the submit button)"
+  "type a name and press Enter" → two lines:
+    PAGE "type a name"
+    press "Enter"
 - When a step lists multiple values separated by dashes (e.g. "Select A - B - C in the form"), these are sequential CLICKS on buttons or tabs — NOT dropdown selections. Split into separate click steps. Use "click" in the description, not "select".
 - When splitting, PRESERVE the full original context in each sub-step description. The runtime LLM will see each sub-step independently without knowledge of the others, so each description must be self-contained and unambiguous.
   For example:
@@ -254,7 +266,14 @@ Rules:
   "check that the number of product cards shown on the page is equal to 'product count'" →
     COUNT "product cards" as "visible_product_cards"
     COMPARE "visible_product_cards" "equal" remembered "product_count"
-- REMEMBER/COMPARE: When a step says to save/note/remember a value → REMEMBER. When a later step compares against it → COMPARE. Any "before vs after" language requires a REMEMBER (or COUNT) before the action and a COMPARE after.
+- REMEMBER/COMPARE ordering: When a step says to save/note/remember a value → REMEMBER. When a later step compares against it → COMPARE. Any "before vs after" language requires a REMEMBER (or COUNT) before the action and a COMPARE after.
+  CRITICAL ordering rule: When a "check that decreased/increased" step needs BOTH a comparison AND a fresh baseline for future comparisons, output the COMPARE FIRST (against the previous variable), THEN the REMEMBER (to capture the new baseline). Never output REMEMBER then COMPARE for the same value — the COMPARE would be comparing against the value it just captured, which always fails. Example for a multi-step comparison flow:
+    REMEMBER "the result count" as "count_1"          ← before first action
+    PAGE "apply filter A"
+    COMPARE "the result count" "less_than" remembered "count_1"   ← compare first
+    REMEMBER "the result count" as "count_2"          ← then capture new baseline
+    PAGE "apply filter B"
+    COMPARE "the result count" "less_than" remembered "count_2"   ← compare against previous baseline
 - MAP DETECTION: If ANY step mentions a map, markers, layers, zoom, pan, coordinates, or geographic features, emit MAP_DETECT before the first such step. Only emit it once.
 - MAP ASSERTIONS: Any assertion about map content must be PAGE (map is WebGL canvas, content not in DOM).
 - CONDITIONAL STEPS: When a step contains "if" + a condition + an action (or uses a suffix like "click X if visible"), emit a conditional line. The format is:

@@ -4,6 +4,7 @@
 
 import type { Action } from "../reporter/types.js"
 import type { Condition } from "./conditions.js"
+import { extractQuotedText } from "./locator.js"
 
 /** A single planned step: the display label and either a pre-resolved action or null. */
 export interface PlannedStep {
@@ -32,7 +33,7 @@ export interface PlannedStep {
 }
 
 const VALID_ACTIONS = new Set([
-	"click", "check", "uncheck", "type", "select", "autocomplete",
+	"click", "check", "uncheck", "type", "clear", "select", "autocomplete",
 	"scroll", "navigate", "press", "wait", "assert", "remember", "count",
 ])
 
@@ -83,8 +84,8 @@ export function parseActionResponse(raw: string): Action {
 		if (!assertType) throw new Error(`assert missing type: ${raw}`)
 
 		// Extract the quoted expected value
-		const quotedMatch = /"([^"]*)"/.exec(cleaned.slice(cleaned.indexOf(assertType) + assertType.length))
-		const expected = quotedMatch?.[1] ?? ""
+		const afterType = cleaned.slice(cleaned.indexOf(assertType) + assertType.length)
+		const expected = extractQuotedText(afterType) ?? ""
 
 		action.assertion = { type: assertType, expected }
 
@@ -420,6 +421,31 @@ export function extractComparisonFromText(
 		}
 	}
 	return null
+}
+
+/**
+ * Fix plan ordering: when a REMEMBER is immediately followed by a COMPARE
+ * that references the same variable, swap them so the COMPARE runs first
+ * (against the previous baseline) and the REMEMBER captures the new value.
+ * Without this fix, the COMPARE would always compare a value against itself.
+ */
+export function fixPlanOrdering(plan: PlannedStep[]): void {
+	for (let i = 0; i < plan.length - 1; i++) {
+		const step = plan[i]
+		const next = plan[i + 1]
+
+		// Check: current step is REMEMBER, next step is COMPARE referencing same variable
+		if (!step.rememberAs) continue
+		const nextCompare = next.compare ?? next.action?.compare
+		if (!nextCompare) continue
+		if (nextCompare.variable !== step.rememberAs) continue
+
+		// Swap them: COMPARE first, then REMEMBER
+		plan[i] = next
+		plan[i + 1] = step
+		// Skip the swapped pair to avoid infinite loop
+		i++
+	}
 }
 
 /**

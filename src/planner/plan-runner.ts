@@ -76,7 +76,7 @@ async function executeHeuristicStep(
 			}
 
 			case "type": {
-				if (!step.value) throw new Error("type step requires a value")
+				if (step.value == null) throw new Error("type step requires a value")
 				if (!step.selector) throw new Error("type step requires a selector")
 				const locator = buildLocator(page, step.selector, hintText)
 				// Hydrate random placeholders with fresh values on each replay

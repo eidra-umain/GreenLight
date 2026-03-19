@@ -154,6 +154,16 @@ describe("parseActionResponse", () => {
 		expect(action).toEqual({ action: "scroll", value: "down" })
 	})
 
+	it("parses text format: assert map_state with escaped quotes", () => {
+		const action = parseActionResponse('assert map_state "map shows \\"örebro\\""')
+		expect(action.assertion).toEqual({ type: "map_state", expected: 'map shows "örebro"' })
+	})
+
+	it("parses text format: assert with inner single quotes", () => {
+		const action = parseActionResponse("assert contains_text 'Welcome back'")
+		expect(action.assertion).toEqual({ type: "contains_text", expected: "Welcome back" })
+	})
+
 })
 
 describe("resolveApiKey", () => {

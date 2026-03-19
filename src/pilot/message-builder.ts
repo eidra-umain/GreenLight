@@ -2,7 +2,7 @@
  * Message construction helpers for the LLM client.
  */
 
-import type { PageState } from "../reporter/types.js"
+import type { A11yNode, PageState } from "../reporter/types.js"
 import { formatA11yTree } from "./a11y-parser.js"
 import { SYSTEM_PROMPT } from "./prompts.js"
 import type { ChatMessage } from "./providers/types.js"
@@ -39,9 +39,100 @@ function formatMapState(mapState: PageState["mapState"]): string {
 	return lines.join("\n")
 }
 
+/**
+ * Max characters for the formatted a11y tree before truncation kicks in.
+ * ~80K chars ≈ ~20K tokens, leaving room for system prompt + history.
+ */
+const MAX_TREE_CHARS = 80_000
+
+/**
+ * Truncate a large a11y tree by summarizing repeated sibling groups.
+ * When a parent has many children with the same role (e.g. 42 installer
+ * cards each with dozens of child elements), show the first few in full
+ * and summarize the rest as one-line entries (heading/name only).
+ */
+function truncateTree(nodes: A11yNode[], budget: number): string {
+	const full = formatA11yTree(nodes)
+	if (full.length <= budget) return full
+
+	// Recursive approach: format nodes, but for large sibling groups
+	// with the same role, show first 3 in full and summarize the rest.
+	return formatTreeWithBudget(nodes, budget)
+}
+
+function formatTreeWithBudget(nodes: A11yNode[], budget: number, indent = 0): string {
+	const lines: string[] = []
+	const prefix = "  ".repeat(indent)
+
+	// Group consecutive children by role to detect repeated patterns
+	let i = 0
+	while (i < nodes.length) {
+		const node = nodes[i]
+
+		// Check if this starts a run of siblings with the same role
+		let runEnd = i + 1
+		while (runEnd < nodes.length && nodes[runEnd].role === node.role && node.children && nodes[runEnd].children) {
+			runEnd++
+		}
+		const runLength = runEnd - i
+
+		if (runLength >= 6 && node.children) {
+			// Large group of same-role siblings — show first 3 in full,
+			// summarize the rest as compact one-liners
+			const SHOW_FULL = 3
+			for (let j = i; j < i + SHOW_FULL && j < runEnd; j++) {
+				lines.push(formatA11yTree([nodes[j]], indent))
+			}
+
+			const remaining = runEnd - i - SHOW_FULL
+			if (remaining > 0) {
+				lines.push(`${prefix}... and ${String(remaining)} more ${node.role} elements (summarized):`)
+				for (let j = i + SHOW_FULL; j < runEnd; j++) {
+					const n = nodes[j]
+					const refLabel = n.ref.startsWith("_") ? "" : `[${n.ref}] `
+					const nameStr = n.name ? ` "${n.name}"` : ""
+					// Find the first named child (usually a heading or button with the item name)
+					const namedChild = n.children?.find((c) => c.name && (c.role === "heading" || c.role === "button" || c.role === "link"))
+					const childInfo = namedChild ? ` → ${namedChild.role} "${namedChild.name}"` : ""
+					lines.push(`${prefix}  ${refLabel}${n.role}${nameStr}${childInfo}`)
+				}
+			}
+			i = runEnd
+		} else {
+			// Not a repeated group — format normally
+			const refLabel = node.ref.startsWith("_") ? "" : `[${node.ref}] `
+			const nameStr = node.name ? ` "${node.name}"` : ""
+			const levelStr = node.level != null ? ` [level=${String(node.level)}]` : ""
+			const urlStr = node.url ? ` → ${node.url}` : ""
+			lines.push(`${prefix}${refLabel}${node.role}${nameStr}${levelStr}${urlStr}`)
+
+			if (!node.ref.startsWith("_")) {
+				const detailPrefix = prefix + "  "
+				if (node.visibleText) lines.push(`${detailPrefix}text: "${node.visibleText}"`)
+				if (node.placeholder) lines.push(`${detailPrefix}placeholder: "${node.placeholder}"`)
+				if (node.value) lines.push(`${detailPrefix}value: "${node.value}"`)
+			}
+
+			if (node.children) {
+				lines.push(formatTreeWithBudget(node.children, budget, indent + 1))
+			}
+			i++
+		}
+
+		// Early exit if we're already over budget
+		const currentLength = lines.join("\n").length
+		if (currentLength > budget * 1.2) {
+			lines.push(`${prefix}... (truncated — ${String(nodes.length - i)} more elements)`)
+			break
+		}
+	}
+
+	return lines.join("\n")
+}
+
 /** Build the user message containing the step and full page state. */
 export function buildUserMessage(step: string, pageState: PageState): string {
-	const tree = formatA11yTree(pageState.a11yTree)
+	const tree = truncateTree(pageState.a11yTree, MAX_TREE_CHARS)
 	const parts = [
 		`Current URL: ${pageState.url}`,
 		`Page title: ${pageState.title}`,

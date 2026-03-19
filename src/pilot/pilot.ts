@@ -9,13 +9,14 @@ import type {
 	Action,
 	ConsoleEntry,
 	MapState,
+	PageState,
 	StepResult,
 	StepTiming,
 	TestCaseResult,
 } from "../reporter/types.js"
 import type { LLMClient } from "./llm.js"
 import type { PlannedStep } from "./response-parser.js"
-import { validatePlanReferences } from "./response-parser.js"
+import { fixPlanOrdering, validatePlanReferences } from "./response-parser.js"
 import { resolveDatePick } from "./datepick.js"
 import { stepNeedsRandom, injectRandomValues, replaceWithPlaceholders, type RandomValues } from "./random.js"
 import { capturePageState } from "./state.js"
@@ -108,6 +109,9 @@ export async function runTestCase(
 		}
 		console.log()
 	}
+
+	// Fix ordering: REMEMBER+COMPARE back-to-back for same variable → swap
+	fixPlanOrdering(plan)
 
 	// Validate that every COMPARE has a matching REMEMBER before it
 	const planErrors = validatePlanReferences(plan)
@@ -474,6 +478,7 @@ export async function runTestCase(
 
 		try {
 			let a11yTree: A11yNode[] = []
+			let lastPageState: PageState | undefined
 
 			if (plannedAction) {
 				// Pre-planned: skip LLM call but capture page state if
@@ -490,6 +495,7 @@ export async function runTestCase(
 					})
 					timing.capture = performance.now() - t0
 					a11yTree = state.a11yTree
+					lastPageState = state
 					if (state.mapState) latestMapState = state.mapState
 				}
 			} else {
@@ -515,6 +521,7 @@ export async function runTestCase(
 				)
 
 				a11yTree = state.a11yTree
+				lastPageState = state
 				if (state.mapState) latestMapState = state.mapState
 			}
 
@@ -567,6 +574,86 @@ export async function runTestCase(
 			)
 
 			if (!result.success) {
+				// Escalate to planner model for a second opinion before giving up
+				if (lastPageState) {
+					try {
+						const plannerAction = await llm.resolveStepWithPlanner(resolveStep, lastPageState)
+						if (plannerAction) {
+							if (globals.debug) {
+								console.log(`      [escalate] Pilot failed, retrying with planner model`)
+								console.log(`      [escalate] Action: ${JSON.stringify(plannerAction)}`)
+							}
+
+							// Propagate plan metadata to the escalated action
+							if (rememberAs) {
+								plannerAction.rememberAs = rememberAs
+								if (plannerAction.action !== "remember") {
+									plannerAction.action = "remember"
+								}
+							}
+							if (plannedCompare) {
+								plannerAction.compare = {
+									variable: plannedCompare.variable,
+									operator: plannedCompare.operator as Action["compare"] extends { operator: infer O } ? O : never,
+									...(plannedCompare.literal !== undefined ? { literal: plannedCompare.literal } : {}),
+								}
+								plannerAction.assertion = { type: "compare", expected: step }
+								plannerAction.action = "assert"
+							}
+
+							const retryResult = await executeAction(page, plannerAction, a11yTree, undefined, {
+								state: latestMapState,
+								adapter: mapAdapter ?? undefined,
+							}, step)
+
+							if (retryResult.success) {
+								if (globals.debug) {
+									console.log(`      [escalate] Planner model succeeded`)
+								}
+								action = plannerAction
+
+								// Store remembered value
+								if (retryResult.rememberedValue !== undefined && plannerAction.rememberAs) {
+									globals.valueStore.set(plannerAction.rememberAs, retryResult.rememberedValue)
+								}
+
+								// Wait for page to stabilize
+								if (plannerAction.action !== "assert") {
+									await page.waitForLoadState("domcontentloaded")
+									if (options.waitForNetworkIdle) {
+										await options.waitForNetworkIdle()
+									}
+								}
+
+								// Record in heuristic plan
+								if (recorder && !insideDatePick) {
+									const recordAction = randomValues && plannerAction.value
+										? { ...plannerAction, value: replaceWithPlaceholders(plannerAction.value, randomValues) }
+										: plannerAction
+									recorder.recordStep(step, recordAction, retryResult, {
+										url: page.url(),
+										title: await page.title(),
+									})
+								}
+
+								// Record success and continue to next step
+								recordStep({
+									step,
+									action: plannerAction,
+									status: "passed",
+									duration: performance.now() - stepStart,
+									timing,
+								})
+								continue
+							}
+						}
+					} catch (escalateErr) {
+						if (globals.debug) {
+							console.log(`      [escalate] Planner model also failed: ${escalateErr instanceof Error ? escalateErr.message : String(escalateErr)}`)
+						}
+					}
+				}
+
 				recordStep({
 					step,
 					action,

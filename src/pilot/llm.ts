@@ -20,7 +20,7 @@ import { buildUserMessage, buildCompactMessage, formatLocalTime } from "./messag
 import { parseActionResponse, parsePlanResponse } from "./response-parser.js"
 import type { PlannedStep } from "./response-parser.js"
 import type { ChatMessage, LLMProvider } from "./providers/index.js"
-import { createProvider } from "./providers/index.js"
+import { createProvider, LLMApiError } from "./providers/index.js"
 
 /** Re-export ChatMessage so existing imports still work. */
 export type { ChatMessage } from "./providers/index.js"
@@ -49,6 +49,12 @@ export interface LLMClient {
 	): Promise<boolean>
 	/** Resolve a single step using the page state and a11y tree. */
 	resolveStep(step: string, pageState: PageState): Promise<Action>
+	/**
+	 * Resolve a step using the planner model (more capable, higher cost).
+	 * Used as a fallback when the pilot model fails to resolve a step.
+	 * Returns null if the planner and pilot use the same model.
+	 */
+	resolveStepWithPlanner(step: string, pageState: PageState): Promise<Action | null>
 	/**
 	 * Expand a compound step into multiple atomic actions using live page state.
 	 * Used for steps like "fill in the form" that need to see the actual form
@@ -337,14 +343,62 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 				console.log(`      [resolve] LLM input:\n${userMessage}`)
 			}
 
-			// Build messages: system + history + new user message
+			// Build messages: system + history + new user message.
+			// Prune oldest history pairs if total would exceed token budget.
+			const TOKEN_BUDGET = 100_000
+			const CHARS_PER_TOKEN = 4
+			const systemTokens = Math.ceil(SYSTEM_PROMPT.length / CHARS_PER_TOKEN)
+			const userTokens = Math.ceil(userMessage.length / CHARS_PER_TOKEN)
+			let historySlice = history
+			let totalTokens = systemTokens + userTokens
+			for (const msg of history) {
+				totalTokens += Math.ceil(msg.content.length / CHARS_PER_TOKEN)
+			}
+			if (totalTokens > TOKEN_BUDGET) {
+				// Drop oldest pairs from history until within budget
+				historySlice = [...history]
+				while (historySlice.length >= 2 && totalTokens > TOKEN_BUDGET) {
+					const dropped1 = historySlice.shift()!
+					const dropped2 = historySlice.shift()!
+					totalTokens -= Math.ceil(dropped1.content.length / CHARS_PER_TOKEN)
+					totalTokens -= Math.ceil(dropped2.content.length / CHARS_PER_TOKEN)
+				}
+				if (globals.debug) {
+					console.log(`      [resolve] Pruned history: ${String(history.length)} → ${String(historySlice.length)} messages (~${String(Math.round(totalTokens))} tokens)`)
+				}
+			}
+
 			const messages: ChatMessage[] = [
 				{ role: "system", content: SYSTEM_PROMPT },
-				...history,
+				...historySlice,
 				{ role: "user", content: userMessage },
 			]
 
-			const content = await chat(messages, config.pilotModel)
+			let content: string
+			try {
+				content = await chat(messages, config.pilotModel)
+			} catch (err) {
+				// If context length exceeded, clear history and retry with just
+				// system + current message (fresh context).
+				if (err instanceof LLMApiError && /context.length|token/i.test(err.message)) {
+					console.log(`      ⚠ Context length exceeded — clearing history and retrying`)
+					history.length = 0
+					prevPageState = null
+					prevFormattedTree = ""
+
+					// Rebuild as a full message (no compact mode without prior state)
+					const freshMessage = buildUserMessage(step, pageState)
+					const freshMessages: ChatMessage[] = [
+						{ role: "system", content: SYSTEM_PROMPT },
+						{ role: "user", content: freshMessage },
+					]
+					content = await chat(freshMessages, config.pilotModel)
+					userMessage = freshMessage
+				} else {
+					throw err
+				}
+			}
+
 			const action = parseActionResponse(content)
 
 			// Cache the result for identical future requests
@@ -361,6 +415,22 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 			prevFormattedTree = formatA11yTree(pageState.a11yTree)
 
 			return action
+		},
+
+		async resolveStepWithPlanner(step: string, pageState: PageState): Promise<Action | null> {
+			// No point retrying with the same model
+			if (config.plannerModel === config.pilotModel) return null
+
+			// Build a fresh full message (no history — one-shot with the planner)
+			const userMessage = buildUserMessage(step, pageState)
+
+			const messages: ChatMessage[] = [
+				{ role: "system", content: SYSTEM_PROMPT },
+				{ role: "user", content: userMessage },
+			]
+
+			const content = await chat(messages, config.plannerModel)
+			return parseActionResponse(content)
 		},
 	}
 }

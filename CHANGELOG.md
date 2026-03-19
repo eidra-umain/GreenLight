@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-03-19
+
+### Added
+
+- **Clear action** — new `clear` action intelligently clears fields, filters, and selections. For text inputs: select-all + delete. For filter chips, dropdowns, and tag inputs: automatically finds and clicks the nearest clear/remove/reset button (searches within the element and siblings, matching labels in multiple languages including Swedish). Test writers just say "clear the search field" or "clear the Elektriker filter".
+- **Planner model escalation** — when the pilot LLM fails to resolve a step, the system automatically retries with the more capable planner model before giving up. One-shot call with fresh page state, no conversation history. Only triggers when planner and pilot use different models.
+- **Context length recovery** — when the LLM returns a context-length-exceeded error, the pilot automatically clears conversation history and retries with a fresh context instead of aborting the entire test run.
+- **Large page handling** — pages with many repeated elements (e.g. 42 installer cards) get a compressed accessibility tree. The first 3 items in a repeated group are shown in full; the rest are summarized as one-liners with just the heading/name. Conversation history is also pruned automatically when approaching the token budget.
+
 ## [0.6.0] - 2026-03-19
 
 ### Added

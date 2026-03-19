@@ -9,7 +9,7 @@ export type AriaRole = Parameters<Page["getByRole"]>[0]
 
 /** All quote characters we recognise (straight + curly). */
 const QUOTE_CHARS = `"'""''`
-const QUOTE_RE = new RegExp(`[${QUOTE_CHARS}]([^${QUOTE_CHARS}]+)[${QUOTE_CHARS}]`)
+const QUOTE_RE = new RegExp(`[${QUOTE_CHARS}]((?:[^${QUOTE_CHARS}\\\\]|\\\\.)+)[${QUOTE_CHARS}]`)
 
 /**
  * Extract the first quoted substring from text, handling straight and
@@ -20,7 +20,7 @@ const QUOTE_RE = new RegExp(`[${QUOTE_CHARS}]([^${QUOTE_CHARS}]+)[${QUOTE_CHARS}
  */
 export function extractQuotedText(text: string): string | null {
 	const match = QUOTE_RE.exec(text)
-	return match ? match[1] : null
+	return match ? match[1].replace(/\\(.)/g, "$1") : null
 }
 
 /**

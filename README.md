@@ -178,13 +178,14 @@ GreenLight takes a different approach:
 
 ## Test syntax
 
-Tests are plain English. The Pilot interprets intent, so phrasing is flexible. Quick reference:
+Tests are plain English. The Pilot interprets intent, so phrasing is flexible. Each plain english descriptions are borken down to one or several actions from the underlying core action set. Quick reference:
 
 | Action | Example |
 |--------|---------|
 | Navigate | `go to "/products"` or `navigate to About from the menu` |
 | Click | `click "Add to Cart"` or `click the Submit button` |
 | Scroll | `scroll down`, `scroll to top`, or `scroll to the footer` |
+| Clear | `clear the search field` or `clear the Elektriker filter` |
 | Type | `enter "jane@example.com" into "Email"` |
 | Select | `select "Canada" from "Country"` (works with native and custom dropdowns) |
 | Form fill | `fill in the contact form with email "a@b.com" and some test data` |
@@ -267,6 +268,17 @@ steps:
 ```
 
 This checks the element's position relative to the browser window, not just DOM visibility. An element can exist on the page and be "visible" in the DOM sense, but still be off-screen at the current scroll position. The `in the viewport` assertion verifies it's actually on screen.
+
+### Clearing fields and filters
+
+```yaml
+steps:
+  - clear the search field                   # text input: select all + delete
+  - clear the Elektriker filter              # filter chip: finds and clicks the clear/remove button
+  - clear the category selection             # dropdown: finds the reset/clear button
+```
+
+GreenLight automatically detects the element type and applies the right clearing strategy. For text inputs, it selects all and deletes. For filter chips, dropdowns, and multi-select tag inputs, it finds and clicks the nearest clear/remove/reset button — looking inside the element and at sibling elements for buttons matching common clear patterns (including localized labels like "Rensa").
 
 ### Typing and form fields
 
@@ -365,11 +377,11 @@ When a step asks to type "a random string", "some test data", or similar, the pi
 ```yaml
 steps:
   - name the booking a random string
-  - enter a random email into the "Email" field
+  - enter an example email into the "Email" field
   - fill the "Description" field with some test data
 ```
 
-For full forms with multiple fields, use the form filling syntax (`fill in the form with some test data`) — GreenLight inspects each field's label, type, and placeholder to generate appropriate data.
+For full forms with multiple fields, use the form filling syntax (`fill in the form with some test data`) — GreenLight inspects each field's label, type, and placeholder to generate appropriate data. The literal word "***random***" will trigger actual random data generation which is different for every run, even if the run is cached.
 
 ### Date and time pickers
 
@@ -552,6 +564,14 @@ tests:
 - **Use assertions liberally** — after key actions, add a `check that` step to verify the expected outcome. This catches failures early and makes the test report more readable.
 - **Don't over-specify DOM structure** — say `click "Add to Cart"` not `click the button inside the product card div`. GreenLight uses the accessibility tree, not CSS selectors.
 - **Conditional steps for flaky UI** — if a cookie banner or popup sometimes appears, use `click "Accept" if visible` instead of making it a required step.
+
+### Robustness features
+
+GreenLight includes several built-in mechanisms to handle real-world complexity:
+
+- **Planner model escalation** — when the fast pilot model fails to resolve a step, GreenLight automatically retries with the more capable planner model before giving up. This catches cases where the cheaper model can't make a tricky element mapping.
+- **Context length recovery** — if the LLM's context window is exceeded (common on pages with large DOM trees), GreenLight clears conversation history and retries with a fresh context instead of aborting the test run.
+- **Large page handling** — pages with many repeated elements (e.g. a list of many product cards with lots of detail) get an automatically compressed accessibility tree: the first few items are shown in full, and the rest are summarized as one-liners. This keeps the input within token limits while preserving all element names for targeting.
 
 ## Cached plans
 
