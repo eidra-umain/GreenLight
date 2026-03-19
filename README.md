@@ -56,12 +56,19 @@ suites:
 deployments:
   staging:
     base_url: https://staging.myapp.com
+
+provider: openrouter
+model:
+  planner: anthropic/claude-sonnet-4.6
+  pilot: openai/gpt-4o-mini
+
 ```
 
+3. Add an `LLM_API_KEY` for your chosen provider using a `.env` file or an environment variable.
 3. Run:
 
 ```bash
-greenlight run
+greenlight run --pilot --headed
 ```
 
 ## Project configuration
