@@ -1,8 +1,8 @@
 {
   "name": "@eidra-umain/greenlight",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "E2E web testing tool — write tests as plain English, no selectors or glue code",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "author": "umain.com",
   "type": "module",
   "main": "dist/cli/index.js",
