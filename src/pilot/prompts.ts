@@ -95,8 +95,12 @@ Example:
 - navigate: Go to a URL. Requires "value" (the URL or path).
 - press: Press a key. Requires "value" (e.g. "Enter", "Tab", "Escape").
 - wait: Wait for a condition. Requires "value" (description of what to wait for).
-- remember: Capture a value from the page. Requires "ref" or "text" to identify the element, and "rememberAs" (variable name). 
+- remember: Capture a value from the page. Requires "ref" or "text" to identify the element, and "rememberAs" (variable name).
   IMPORTANT: Target the most specific element containing the value — not a parent or wrapper.
+- count: Count the number of elements matching a description. Requires "text" (a common denominator text or role description that matches ALL target elements) and "rememberAs" (variable name to store the count).
+  The "text" should be something that uniquely identifies the repeated elements — e.g. a common label, role, or visible text pattern shared by all instances.
+  Look at the accessibility tree to find a role+name pattern that all target elements share. Use the element's accessible name or visible text as the "text" value.
+  IMPORTANT: Choose a "text" value that matches ALL target elements and ONLY the target elements. If the elements have a common role (e.g. "article", "listitem", "row"), prefer using that as a discriminator.
 
 ═══ Assertion actions ═══
 
@@ -147,6 +151,8 @@ navigate value="/products"
 press value="Enter"
 scroll value="down"
 remember ref=e15 as="product_count"
+count text="product card" as="product_cards"
+count text="Add to Cart" as="cart_buttons"
 assert contains_text "Welcome back"
 assert element_visible "Submit"
 assert element_not_visible "Error"
@@ -177,6 +183,7 @@ IMPORTANT: Prefix every output line with the input step number it came from, usi
     "set the start time to 10 minutes from now" → DATEPICK "set the start time to 10 minutes from now" "10 minutes from now"
     "set the end date to tomorrow" → DATEPICK "set the end date to tomorrow" "tomorrow"
     "enter 2026-06-15 in the date field" → DATEPICK "enter 2026-06-15 in the date field" "2026-06-15"
+- COUNT "what to count" as "variable_name" — counts the number of elements matching a description on the live page. The description tells the runtime what kind of elements to count. The variable name is a short identifier. Use this when the step says "count the number of X" or "remember how many X there are". The count is stored as a number in the variable for later comparison.
 - REMEMBER "what to capture from the page" as "variable_name" — captures a value from the page for later comparison. The description tells the runtime what to extract. The variable name is a short identifier.
 - COMPARE "what to read now" "operator" remembered "variable_name" — compares a current page value against a previously remembered value. Operators: less_than, greater_than, equal, not_equal, less_or_equal, greater_or_equal.
 - ASSERT_REMEMBERED "variable_name" — asserts that the text stored in a previously remembered variable is visible on the page. Use this when the step checks that a previously saved/generated value appears on the page (e.g. "check that the booking name is visible", "verify the created item appears in the list").
@@ -232,7 +239,12 @@ Rules:
   "set the start time to 10 minutes from now" → DATEPICK "set the start time to 10 minutes from now"
   "set the end date to tomorrow" → DATEPICK "set the end date to tomorrow"
   "enter 2026-06-15 in the date field" → DATEPICK "enter 2026-06-15 in the date field"
-- REMEMBER/COMPARE: When a step says to save/note/remember a value → REMEMBER. When a later step compares against it → COMPARE. Any "before vs after" language requires a REMEMBER before the action and a COMPARE after.
+- COUNT: When a step says to count elements (e.g. "count the number of product cards", "remember how many rows there are") → COUNT. The stored count can be compared later with COMPARE just like REMEMBER.
+- COUNT + COMPARE: When a step checks that the number/count of visible elements equals (or is less than, etc.) a previously remembered value, split into COUNT + COMPARE. The COUNT stores the element count in a new variable, and the COMPARE compares it to the remembered variable. Example:
+  "check that the number of product cards shown on the page is equal to 'product count'" →
+    COUNT "product cards" as "visible_product_cards"
+    COMPARE "visible_product_cards" "equal" remembered "product_count"
+- REMEMBER/COMPARE: When a step says to save/note/remember a value → REMEMBER. When a later step compares against it → COMPARE. Any "before vs after" language requires a REMEMBER (or COUNT) before the action and a COMPARE after.
 - MAP DETECTION: If ANY step mentions a map, markers, layers, zoom, pan, coordinates, or geographic features, emit MAP_DETECT before the first such step. Only emit it once.
 - MAP ASSERTIONS: Any assertion about map content must be PAGE (map is WebGL canvas, content not in DOM).
 - CONDITIONAL STEPS: When a step contains "if" + a condition + an action (or uses a suffix like "click X if visible"), emit a conditional line. The format is:
@@ -260,6 +272,11 @@ Examples:
   "Verify the drawer opens and contains \\"Hello\\"" → assert contains_text "Hello"
   "verify that the \\"Submit\\" button is disabled" → assert element_disabled "Submit"
   "verify that the \\"Submit\\" button is enabled" → assert element_enabled "Submit"
+  "count the number of product cards" → COUNT "product cards" as "product_card_count"
+  "remember how many rows are in the table" → COUNT "table rows" as "row_count"
+  "check that the number of product cards equals 'product count'" →
+    COUNT "product cards" as "visible_cards"
+    COMPARE "visible_cards" "equal" remembered "product_count"
   "remember the total price" → REMEMBER "the total price shown" as "total_price"
   "check that the price decreased" → COMPARE "the total price shown" "less_than" remembered "total_price"
   "remember the name of the booking" → REMEMBER "the booking name" as "booking_name"

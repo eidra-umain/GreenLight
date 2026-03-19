@@ -148,7 +148,7 @@ export async function runTestCase(
 		const planned = queue[queueIndex]
 		queueIndex++
 		currentQueuePlanned = planned
-		const { step, action: plannedAction, needsExpansion, needsDatePick, needsMapDetect, rememberAs, compare: plannedCompare } = planned
+		const { step, action: plannedAction, needsExpansion, needsDatePick, needsMapDetect, needsCount, rememberAs, compare: plannedCompare } = planned
 
 		// ── MAP_DETECT: find and attach to a map instance ─────────────
 		if (needsMapDetect) {
@@ -361,6 +361,90 @@ export async function runTestCase(
 				duration: performance.now() - stepStart,
 				conditionResult: { met: conditionMet, branch: branchLabel },
 			})
+			continue
+		}
+
+		// ── COUNT: count elements on the live page ──────────────────
+		if (needsCount) {
+			trace.log("count:start", step)
+			const stepStart2 = performance.now()
+
+			if (options.waitForNetworkIdle) {
+				await options.waitForNetworkIdle()
+			}
+			const state = await capturePageState(page, options.consoleDrain, {
+				mapAdapter: mapAdapter ?? undefined,
+			})
+
+			try {
+				// Ask the LLM to identify the common denominator text for the elements to count
+				const countAction = await llm.resolveStep(
+					`Count the number of elements matching: "${step}". Return a count action with the common text or role description that matches all target elements.`,
+					state,
+				)
+
+				// Ensure it's treated as a count action
+				if (countAction.action !== "count") {
+					countAction.action = "count"
+				}
+				if (!countAction.text && !countAction.ref) {
+					// Use the step description as fallback
+					countAction.text = step
+				}
+				countAction.rememberAs = rememberAs
+
+				if (globals.debug) {
+					console.log(`      [count] LLM resolved: text="${countAction.text ?? ""}" ref="${countAction.ref ?? ""}"`)
+				}
+
+				const result = await executeAction(page, countAction, state.a11yTree)
+
+				if (!result.success) {
+					recordStep({
+						step,
+						action: countAction,
+						status: "failed",
+						duration: performance.now() - stepStart2,
+						error: result.error,
+					})
+					failed = true
+					continue
+				}
+
+				// Store the count in valueStore
+				if (result.rememberedValue !== undefined && rememberAs) {
+					globals.valueStore.set(rememberAs, result.rememberedValue)
+				}
+
+				// Record in heuristic plan
+				if (recorder) {
+					recorder.recordStep(
+						step,
+						{ ...countAction, value: countAction.text },
+						result,
+						{ url: page.url(), title: await page.title() },
+					)
+				}
+
+				recordStep({
+					step,
+					action: countAction,
+					status: "passed",
+					duration: performance.now() - stepStart2,
+				})
+			} catch (err) {
+				const { LLMApiError } = await import("./providers/index.js")
+				if (err instanceof LLMApiError) throw err
+
+				recordStep({
+					step,
+					action: null,
+					status: "failed",
+					duration: performance.now() - stepStart2,
+					error: `Count failed: ${err instanceof Error ? err.message : String(err)}`,
+				})
+				failed = true
+			}
 			continue
 		}
 

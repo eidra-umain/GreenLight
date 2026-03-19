@@ -119,7 +119,7 @@ export function extractNumber(text: string): number | null {
  *    short window (±80 chars) of a keyword match. This handles cases where the
  *    number and label are in separate DOM elements (adjacent lines).
  */
-async function findValueByKeyword(page: Page, hint: string): Promise<string> {
+export async function findValueByKeyword(page: Page, hint: string): Promise<string> {
 	const keywords = hint
 		.replace(/_/g, " ")
 		.split(/\s+/)
@@ -215,11 +215,24 @@ export async function executeCompareAssertion(
 		throw new Error(`No remembered value found for "${variable}"`)
 	}
 
-	// Get the current value from the page.
-	// Try the element ref/text first; if the ref is stale, fall back to keyword search.
+	// Get the current value.
+	// If the assertion's expected text matches a stored variable (e.g. from a
+	// preceding COUNT), use that directly instead of reading from the page.
+	// Otherwise, try the element ref/text first; if stale, fall back to keyword search.
 	let currentText: string
 	const searchHint = action.assertion?.expected ?? variable
-	if (action.ref || action.text) {
+	const hintAsVar = searchHint.replace(/\s+/g, "_").toLowerCase()
+	if (globals.valueStore.has(searchHint)) {
+		currentText = globals.valueStore.get(searchHint) ?? ""
+		if (globals.debug) {
+			console.log(`      [compare] Using stored variable "${searchHint}" = "${currentText}" as current value`)
+		}
+	} else if (globals.valueStore.has(hintAsVar)) {
+		currentText = globals.valueStore.get(hintAsVar) ?? ""
+		if (globals.debug) {
+			console.log(`      [compare] Using stored variable "${hintAsVar}" = "${currentText}" as current value`)
+		}
+	} else if (action.ref || action.text) {
 		try {
 			const locator = await resolveActionTarget(page, action, a11yTree)
 			currentText = (await locator.textContent() ?? "").trim()
@@ -239,9 +252,9 @@ export async function executeCompareAssertion(
 			currentText = await findValueByKeyword(page, searchHint)
 		}
 	} else {
-		// Use assertion.expected as hint (the step description) when the
-		// variable name is useless (e.g. "_" for literal comparisons).
-		const hint = (variable === "_" ? action.assertion?.expected : null) ?? variable
+		// Prefer assertion.expected (the step description, often in page language)
+		// over the variable name (often an English identifier like "product_count").
+		const hint = action.assertion?.expected ?? variable
 		currentText = await findValueByKeyword(page, hint)
 	}
 

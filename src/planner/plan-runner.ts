@@ -16,6 +16,7 @@ import { evaluateCondition } from "../pilot/conditions.js"
 import { resolveDatePick } from "../pilot/datepick.js"
 import { capturePageState } from "../pilot/state.js"
 import { hydratePlaceholders } from "../pilot/random.js"
+import { findValueByKeyword } from "../pilot/assertions.js"
 import { globals } from "../globals.js"
 
 type AriaRole = Parameters<Page["getByRole"]>[0]
@@ -211,6 +212,58 @@ async function executeHeuristicStep(
 				break
 			}
 
+			case "count": {
+				// Count elements matching the stored text description.
+				// The value field stores the text description used during discovery.
+				const searchText = step.value ?? step.originalStep
+				const varName = step.rememberAs ?? "count"
+
+				let bestCount = 0
+				let matchedStrategy = ""
+
+				// Strategy 1: getByRole with common container roles
+				const containerRoles: Array<Parameters<Page["getByRole"]>[0]> = [
+					"article", "listitem", "row", "card" as Parameters<Page["getByRole"]>[0],
+					"link", "button", "heading", "img",
+				]
+				for (const role of containerRoles) {
+					try {
+						const count = await page.getByRole(role, { name: new RegExp(searchText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") }).count()
+						if (count > bestCount) {
+							bestCount = count
+							matchedStrategy = `getByRole("${role}")`
+						}
+					} catch { /* try next */ }
+				}
+
+				// Strategy 2a: exact text match (case-sensitive, whole-string)
+				try {
+					const exactCount = await page.getByText(searchText, { exact: true }).count()
+					if (exactCount > bestCount) {
+						bestCount = exactCount
+						matchedStrategy = `getByText("${searchText}", exact)`
+					}
+				} catch { /* skip */ }
+
+				// Strategy 2b: substring text match (only if exact found nothing)
+				if (bestCount === 0) {
+					try {
+						const textCount = await page.getByText(searchText).count()
+						if (textCount > bestCount) {
+							bestCount = textCount
+							matchedStrategy = `getByText("${searchText}")`
+						}
+					} catch { /* skip */ }
+				}
+
+				if (globals.debug) {
+					console.log(`      [cached:count] Found ${String(bestCount)} elements matching "${searchText}" via ${matchedStrategy}`)
+				}
+
+				globals.valueStore.set(varName, String(bestCount))
+				return { success: true, duration: performance.now() - start }
+			}
+
 			case "remember": {
 				const varName = step.rememberAs ?? step.value ?? ""
 				const wantsNumber = /number|count|total|amount|qty|quantity|pris|antal|resultat/.test(
@@ -233,34 +286,17 @@ async function executeHeuristicStep(
 					}
 				}
 				if (!capturedText) {
-					// No selector stored — use innerText (preserves visual
-					// line breaks) and search for text matching keywords
-					const keywords = varName
-						.replace(/_/g, " ")
-						.split(" ")
-						.filter((w) => w.length > 2)
-					const innerText = await page.locator("body").innerText()
-					// Split on newlines/tabs to get visual text segments
-					const segments = innerText
-						.split(/[\n\t]+/)
-						.map((s) => s.trim())
-						.filter(Boolean)
-					let best = ""
-					for (const seg of segments) {
-						if (!/\d/.test(seg)) continue
-						const lower = seg.toLowerCase()
-						if (keywords.some((kw) => lower.includes(kw.toLowerCase()))) {
-							if (!best || seg.length < best.length) {
-								best = seg
-							}
-						}
-					}
-					if (!best) {
+					// No selector stored — use page-text keyword search.
+					// Prefer the original step description (in page language)
+					// over the variable name (often an English identifier).
+					const searchHint = step.originalStep || varName.replace(/_/g, " ")
+					try {
+						capturedText = await findValueByKeyword(page, searchHint)
+					} catch {
 						throw new Error(
 							"remember: no selector stored and could not find matching value on page",
 						)
 					}
-					capturedText = best
 				}
 				if (globals.debug) {
 					console.log(`      [cached:remember] Captured "${capturedText}" as "${varName}"`)

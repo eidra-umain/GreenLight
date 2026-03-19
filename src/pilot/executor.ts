@@ -11,7 +11,6 @@ import type {
 	ResolvedSelector,
 } from "../reporter/types.js"
 import type { MapAdapter } from "../map/types.js"
-import Fuse from "fuse.js"
 import { globals } from "../globals.js"
 
 import {
@@ -21,7 +20,7 @@ import {
 	findNodeByRef,
 } from "./locator.js"
 import { checkCheckbox } from "./checkbox.js"
-import { executeAssertion } from "./assertions.js"
+import { executeAssertion, findValueByKeyword } from "./assertions.js"
 
 
 /**
@@ -67,56 +66,6 @@ function flattenNodes(nodes: A11yNode[]): A11yNode[] {
 	return result
 }
 
-/**
- * Search the enriched a11y tree for a value matching a query string.
- * Uses Fuse.js fuzzy matching against node name, placeholder, visibleText,
- * and value. When the best match is an input with a value, returns the
- * value (what was typed) rather than the label.
- *
- * Used as a fallback when the LLM returns a remember action without
- * specifying a target element.
- */
-function findValueInTree(nodes: A11yNode[], keywords: string[]): string {
-	const flat = flattenNodes(nodes).filter((n) => !n.ref.startsWith("_"))
-	if (flat.length === 0) return ""
-
-	const query = keywords.join(" ")
-
-	const fuse = new Fuse(flat, {
-		keys: [
-			{ name: "name", weight: 2 },
-			{ name: "placeholder", weight: 1.5 },
-			{ name: "visibleText", weight: 1 },
-			{ name: "value", weight: 0.5 },
-		],
-		threshold: 0.4,
-		includeScore: true,
-	})
-
-	const results = fuse.search(query)
-
-	if (globals.debug && results.length > 0) {
-		console.log(`      [remember] Fuse.js top matches for "${query}":`)
-		for (const r of results.slice(0, 3)) {
-			console.log(`        - [${r.item.ref}] "${r.item.name}" value="${r.item.value ?? ""}" (score: ${String(r.score?.toFixed(3))})`)
-		}
-	}
-
-	if (results.length > 0) {
-		const best = results[0].item
-		// Prefer the input value (what was typed) over the label
-		if (best.value) return best.value
-		if (best.visibleText) return best.visibleText
-		return best.name
-	}
-
-	// No fuzzy match — return the first non-empty value field
-	for (const node of flat) {
-		if (node.value) return node.value
-	}
-
-	return ""
-}
 
 /**
  * Execute a single Action against the browser page.
@@ -565,54 +514,139 @@ export async function executeAction(
 				break
 			}
 
+			case "count": {
+				if (!action.text) {
+					throw new Error("count action requires a text description of elements to count")
+				}
+				const searchText = action.text
+
+				// Strategy 1: Try getByRole with common container roles
+				// Look for elements whose accessible name contains the search text
+				const containerRoles: Array<Parameters<Page["getByRole"]>[0]> = [
+					"article", "listitem", "row", "card" as Parameters<Page["getByRole"]>[0],
+					"link", "button", "heading", "img",
+				]
+				let bestCount = 0
+				let matchedStrategy = ""
+
+				for (const role of containerRoles) {
+					try {
+						const count = await page.getByRole(role, { name: new RegExp(searchText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") }).count()
+						if (count > bestCount) {
+							bestCount = count
+							matchedStrategy = `getByRole("${role}")`
+						}
+					} catch { /* try next */ }
+				}
+
+				// Strategy 2a: Try exact text match (case-sensitive, whole-string).
+				// This avoids false positives from headings, breadcrumbs, alerts
+				// that contain the same word with different casing or extra text.
+				try {
+					const exactCount = await page.getByText(searchText, { exact: true }).count()
+					if (exactCount > bestCount) {
+						bestCount = exactCount
+						matchedStrategy = `getByText("${searchText}", exact)`
+					}
+				} catch { /* skip */ }
+
+				// Strategy 2b: Try substring text match (only if exact found nothing)
+				if (bestCount === 0) {
+					try {
+						const textCount = await page.getByText(searchText).count()
+						if (textCount > bestCount) {
+							bestCount = textCount
+							matchedStrategy = `getByText("${searchText}")`
+						}
+					} catch { /* skip */ }
+				}
+
+				// Strategy 3: Search the a11y tree for nodes matching the description
+				if (bestCount === 0) {
+					const flat = flattenNodes(a11yTree).filter((n) => !n.ref.startsWith("_"))
+					const lower = searchText.toLowerCase()
+					const matchingNodes = flat.filter((n) => {
+						const nameMatch = n.name.toLowerCase().includes(lower)
+						const textMatch = n.visibleText?.toLowerCase().includes(lower)
+						const roleMatch = n.role.toLowerCase().includes(lower)
+						return nameMatch || textMatch || roleMatch
+					})
+					if (matchingNodes.length > bestCount) {
+						bestCount = matchingNodes.length
+						matchedStrategy = "a11y tree search"
+					}
+				}
+
+				if (globals.debug) {
+					console.log(`      [count] Found ${String(bestCount)} elements matching "${searchText}" via ${matchedStrategy}`)
+				}
+
+				rememberedValue = String(bestCount)
+				break
+			}
+
 			case "remember": {
 				let capturedText: string
 				if (action.ref || action.text) {
-					const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
-					resolvedSelector = await extractSelectorInfo(
-						page,
-						action,
-						a11yTree,
-						locator,
-					)
-					// Try inputValue() first (for inputs/textareas), fall back to textContent
-					capturedText = (await locator.inputValue().catch(() => null) ?? await locator.textContent() ?? "").trim()
+					let locatorResolved = false
+					try {
+						const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
+						resolvedSelector = await extractSelectorInfo(
+							page,
+							action,
+							a11yTree,
+							locator,
+						)
+						// Try inputValue() first (for inputs/textareas), fall back to textContent
+						capturedText = (await locator.inputValue().catch(() => null) ?? await locator.textContent() ?? "").trim()
+						locatorResolved = true
+					} catch {
+						// Element ref is stale (e.g. page re-rendered after a filter change).
+						// Fall back to keyword search below.
+						if (globals.debug) {
+							console.log(`      [remember] Element target failed, falling back to keyword search`)
+						}
+						capturedText = ""
+					}
 
 					// If the variable name or step implies we need a number but
-					// the captured text has none, the LLM likely picked the wrong
-					// element. Fall back to keyword search in the a11y tree.
+					// the captured text has none (or the ref was stale), the LLM
+					// likely picked the wrong element. Fall back to page-text
+					// keyword search (same strategy as compare assertions).
 					const wantsNumber = /number|count|total|amount|qty|quantity|pris|antal|resultat/.test(
-						(action.rememberAs ?? "").toLowerCase(),
+						(action.rememberAs ?? "").toLowerCase() + " " + (stepHint ?? "").toLowerCase(),
 					)
-					if (wantsNumber && !/\d/.test(capturedText)) {
-						if (globals.debug) {
+					if (!locatorResolved || (wantsNumber && !/\d/.test(capturedText))) {
+						if (globals.debug && locatorResolved) {
 							console.log(`      [remember] Captured "${capturedText}" but expected a number — falling back to keyword search`)
 						}
-						const keywords = (action.rememberAs ?? "")
-							.replace(/_/g, " ")
-							.split(" ")
-							.filter((w) => w.length > 2)
-						const fallback = findValueInTree(a11yTree, keywords)
-						if (fallback) {
-							capturedText = fallback
+						// Use the step hint (original step text) as search hint —
+						// it contains page-language terms. Fall back to variable name.
+						const searchHint = stepHint ?? (action.rememberAs ?? "").replace(/_/g, " ")
+						try {
+							capturedText = await findValueByKeyword(page, searchHint)
 							if (globals.debug) {
 								console.log(`      [remember] Keyword search found: "${capturedText}"`)
+							}
+						} catch {
+							if (!locatorResolved) {
+								throw new Error(
+									`remember action: element ref "${action.ref}" not found and keyword search found no match`,
+								)
 							}
 						}
 					}
 				} else {
-					// LLM didn't specify a target element. Search the a11y tree
-					// for nodes whose text contains a number and matches keywords
-					// from the step description (the variable name or step text).
+					// LLM didn't specify a target element. Use page-text keyword
+					// search (same strategy as compare assertions) to find a
+					// text segment containing both a number and a matching keyword.
 					if (globals.debug) {
-						console.log(`      [remember] No ref/text target, searching a11y tree for matching value`)
+						console.log(`      [remember] No ref/text target, searching page text for matching value`)
 					}
-					const keywords = (action.rememberAs ?? "")
-						.replace(/_/g, " ")
-						.split(" ")
-						.filter((w) => w.length > 2)
-					capturedText = findValueInTree(a11yTree, keywords)
-					if (!capturedText) {
+					const searchHint = stepHint ?? (action.rememberAs ?? "").replace(/_/g, " ")
+					try {
+						capturedText = await findValueByKeyword(page, searchHint)
+					} catch {
 						throw new Error(
 							`remember action: LLM returned no element target and could not find a matching value in the page`,
 						)

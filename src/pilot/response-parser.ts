@@ -17,6 +17,8 @@ export interface PlannedStep {
 	needsMapDetect?: boolean
 	/** For REMEMBER steps: the variable name to store the captured value under. */
 	rememberAs?: string
+	/** If true, this step counts matching elements on the live page and stores the count. */
+	needsCount?: boolean
 	/** For COMPARE steps: the comparison metadata (variable + operator, or literal). Resolved at runtime. */
 	compare?: { variable: string; operator: string; literal?: string }
 	/** For conditional steps: the condition to evaluate at runtime. */
@@ -31,7 +33,7 @@ export interface PlannedStep {
 
 const VALID_ACTIONS = new Set([
 	"click", "check", "uncheck", "type", "select", "autocomplete",
-	"scroll", "navigate", "press", "wait", "assert", "remember",
+	"scroll", "navigate", "press", "wait", "assert", "remember", "count",
 ])
 
 /**
@@ -104,6 +106,10 @@ export function parseActionResponse(raw: string): Action {
 		action.ref = extractParam(cleaned, "ref")
 		action.text = extractParam(cleaned, "text")
 		action.rememberAs = extractParam(cleaned, "as")
+	} else if (actionType === "count") {
+		action.ref = extractParam(cleaned, "ref")
+		action.text = extractParam(cleaned, "text")
+		action.rememberAs = extractParam(cleaned, "as")
 	} else {
 		action.ref = extractParam(cleaned, "ref")
 		action.text = extractParam(cleaned, "text")
@@ -125,6 +131,7 @@ function parsePlanAction(token: string): {
 	needsExpansion?: boolean
 	needsDatePick?: boolean
 	needsMapDetect?: boolean
+	needsCount?: boolean
 	rememberAs?: string
 	compare?: { variable: string; operator: string; literal?: string }
 	condition?: Condition
@@ -170,6 +177,17 @@ function parsePlanAction(token: string): {
 			condition: { type: condType, target: condTarget },
 			thenBranch: [thenStep],
 			elseBranch,
+		}
+	}
+
+	// COUNT "description" as "variable_name" — count elements matching a description
+	const countMatch = /^count\s+"([^"]+)"\s+as\s+"([^"]+)"$/i.exec(t)
+	if (countMatch) {
+		return {
+			action: null,
+			description: countMatch[1],
+			needsCount: true,
+			rememberAs: countMatch[2],
 		}
 	}
 
@@ -353,7 +371,7 @@ export function parsePlanResponse(raw: string): PlannedStep[] {
 				trimmedLine = trimmedLine.slice(indexMatch[0].length)
 			}
 
-			const { action, description, needsExpansion, needsDatePick, needsMapDetect, rememberAs, compare, condition, thenBranch, elseBranch } = parsePlanAction(trimmedLine)
+			const { action, description, needsExpansion, needsDatePick, needsMapDetect, needsCount, rememberAs, compare, condition, thenBranch, elseBranch } = parsePlanAction(trimmedLine)
 			const step = description ?? trimmedLine
 			return {
 				step,
@@ -361,6 +379,7 @@ export function parsePlanResponse(raw: string): PlannedStep[] {
 				...(needsExpansion ? { needsExpansion: true } : {}),
 				...(needsDatePick ? { needsDatePick: true } : {}),
 				...(needsMapDetect ? { needsMapDetect: true } : {}),
+				...(needsCount ? { needsCount: true } : {}),
 				...(rememberAs ? { rememberAs } : {}),
 				...(compare ? { compare } : {}),
 				...(condition ? { condition } : {}),
