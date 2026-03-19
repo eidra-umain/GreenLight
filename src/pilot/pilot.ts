@@ -35,6 +35,8 @@ export interface PilotOptions {
 	recorder?: PlanRecorder
 	/** Wait for network requests to settle before capturing page state. */
 	waitForNetworkIdle?: () => Promise<void>
+	/** Capture post-step screenshots (default: false). */
+	screenshots?: boolean
 	/** Called after each step completes, for live progress output. */
 	onStepComplete?: (result: StepResult) => void
 }
@@ -498,13 +500,13 @@ export async function runTestCase(
 			let postState
 			try {
 				postState = await capturePageState(page, options.consoleDrain, {
-					screenshot: true,
+					screenshot: options.screenshots ?? false,
 					mapAdapter: mapAdapter ?? undefined,
 				})
 			} catch {
 				await page.waitForLoadState("domcontentloaded")
 				postState = await capturePageState(page, options.consoleDrain, {
-					screenshot: true,
+					screenshot: options.screenshots ?? false,
 					mapAdapter: mapAdapter ?? undefined,
 				})
 			}
