@@ -6,11 +6,24 @@ export const ViewportSchema = z.object({
 	height: z.number().int().positive(),
 })
 
+/** A block conditional step: if/then/else with multi-step branches. */
+export const ConditionalStepSchema = z.object({
+	if: z.string().min(1),
+	then: z.array(z.string().min(1)).min(1),
+	else: z.array(z.string().min(1)).optional(),
+})
+
+/** A step is either a plain string or a block conditional. */
+export const StepSchema = z.union([
+	z.string().min(1),
+	ConditionalStepSchema,
+])
+
 /** A single test case: a name and ordered list of plain-English steps. */
 export const TestCaseSchema = z.object({
 	name: z.string().min(1),
 	description: z.string().optional(),
-	steps: z.array(z.string().min(1)).min(1),
+	steps: z.array(StepSchema).min(1),
 })
 
 /**
@@ -36,4 +49,6 @@ export const SuiteSchema = z.object({
 /** Inferred TypeScript types from the schemas. */
 export type Suite = z.infer<typeof SuiteSchema>
 export type TestCase = z.infer<typeof TestCaseSchema>
+export type ConditionalStep = z.infer<typeof ConditionalStepSchema>
+export type Step = z.infer<typeof StepSchema>
 export type Viewport = z.infer<typeof ViewportSchema>

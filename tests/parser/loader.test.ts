@@ -71,4 +71,46 @@ describe("loadSuite", () => {
 		const suite = await loadSuite(fixture("env-suite.yaml"))
 		expect(suite.tests[0].steps[0]).toBe('enter "s3cret" into "Password"')
 	})
+
+	// ── Block conditionals ───────────────────────────────────────────
+
+	it("flattens single-step block conditional to inline", async () => {
+		const suite = await loadSuite(fixture("conditional-suite.yaml"))
+		const steps = suite.tests[0].steps
+		// { if: "popup visible", then: ["click Dismiss"] } → "if popup visible then click \"Dismiss\""
+		const popupStep = steps.find((s) => s.includes("popup"))
+		expect(popupStep).toBe('if popup visible then click "Dismiss"')
+	})
+
+	it("flattens single-step if/else to inline", async () => {
+		const suite = await loadSuite(fixture("conditional-suite.yaml"))
+		const steps = suite.tests[0].steps
+		// { if: "login prompt visible", then: ["click Sign in"], else: ["check logged in"] }
+		const loginStep = steps.find((s) => s.includes("login prompt"))
+		expect(loginStep).toBe('if login prompt visible then click "Sign in" else check that user is logged in')
+	})
+
+	it("flattens multi-step then branch into multiple conditionals", async () => {
+		const suite = await loadSuite(fixture("conditional-suite.yaml"))
+		const steps = suite.tests[0].steps
+		// { if: "cookie banner", then: ["click Accept all", "wait for banner"] }
+		const cookieSteps = steps.filter((s) => s.includes("cookie banner"))
+		expect(cookieSteps).toHaveLength(2)
+		expect(cookieSteps[0]).toBe('if cookie banner is visible then click "Accept all"')
+		expect(cookieSteps[1]).toBe("if cookie banner is visible then wait for banner to disappear")
+	})
+
+	it("preserves plain string steps alongside conditionals", async () => {
+		const suite = await loadSuite(fixture("conditional-suite.yaml"))
+		const steps = suite.tests[0].steps
+		expect(steps[0]).toBe("navigate to /home")
+		expect(steps.some((s) => s === "check that the page loaded")).toBe(true)
+	})
+
+	it("all steps are plain strings after loading", async () => {
+		const suite = await loadSuite(fixture("conditional-suite.yaml"))
+		for (const step of suite.tests[0].steps) {
+			expect(typeof step).toBe("string")
+		}
+	})
 })

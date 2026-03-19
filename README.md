@@ -414,7 +414,26 @@ steps:
   - if url contains "/login" then check that page contains "Sign in"
 ```
 
-Supported conditions:
+#### Block conditionals
+
+For multi-step branches, use YAML structure:
+
+```yaml
+steps:
+  - navigate to /home
+  - if: cookie banner is visible
+    then:
+      - click "Accept all"
+      - wait for the banner to disappear
+    else:
+      - check that the product list is visible
+  - search for "headphones"
+```
+
+The `else` block is optional. Block conditionals are flattened to inline conditionals at load time — the planner and pilot handle them the same way.
+
+#### Supported conditions
+
 - **Visibility:** `if "text" is visible`, `if the page shows "text"`
 - **Text presence:** `if page contains "text"`, `if the page shows "text"`
 - **URL:** `if url contains "/path"`

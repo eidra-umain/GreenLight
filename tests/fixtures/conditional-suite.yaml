@@ -1,0 +1,19 @@
+suite: "Conditional Test"
+
+tests:
+  - name: "Block conditionals"
+    steps:
+      - navigate to /home
+      - if: cookie banner is visible
+        then:
+          - click "Accept all"
+          - wait for banner to disappear
+      - check that the page loaded
+      - if: login prompt visible
+        then:
+          - click "Sign in"
+        else:
+          - check that user is logged in
+      - if: popup visible
+        then:
+          - click "Dismiss"

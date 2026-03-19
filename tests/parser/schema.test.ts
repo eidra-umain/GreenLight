@@ -76,4 +76,66 @@ describe("SuiteSchema", () => {
 		})
 		expect(result.tests[0].description).toBe("A test")
 	})
+
+	it("accepts block conditional steps", () => {
+		const result = SuiteSchema.parse({
+			...minimal,
+			tests: [{
+				name: "T",
+				steps: [
+					"click button",
+					{ if: "cookie banner visible", then: ["click Accept"] },
+				],
+			}],
+		})
+		expect(result.tests[0].steps).toHaveLength(2)
+	})
+
+	it("accepts block conditional with else branch", () => {
+		const result = SuiteSchema.parse({
+			...minimal,
+			tests: [{
+				name: "T",
+				steps: [
+					{ if: "dialog visible", then: ["click Yes"], else: ["click No"] },
+				],
+			}],
+		})
+		const step = result.tests[0].steps[0]
+		expect(typeof step).toBe("object")
+		if (typeof step === "object") {
+			expect(step.if).toBe("dialog visible")
+			expect(step.then).toEqual(["click Yes"])
+			expect(step.else).toEqual(["click No"])
+		}
+	})
+
+	it("accepts mixed string and conditional steps", () => {
+		const result = SuiteSchema.parse({
+			...minimal,
+			tests: [{
+				name: "T",
+				steps: [
+					"navigate to /home",
+					{ if: "popup visible", then: ["dismiss popup"] },
+					"click Submit",
+				],
+			}],
+		})
+		expect(result.tests[0].steps).toHaveLength(3)
+	})
+
+	it("rejects conditional with empty then", () => {
+		expect(() => SuiteSchema.parse({
+			...minimal,
+			tests: [{ name: "T", steps: [{ if: "x", then: [] }] }],
+		})).toThrow()
+	})
+
+	it("rejects conditional with empty if", () => {
+		expect(() => SuiteSchema.parse({
+			...minimal,
+			tests: [{ name: "T", steps: [{ if: "", then: ["click"] }] }],
+		})).toThrow()
+	})
 })
