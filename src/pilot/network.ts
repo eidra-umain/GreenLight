@@ -20,6 +20,7 @@
 
 import type { Page, Request } from "playwright"
 import type { ConsoleEntry } from "../reporter/types.js"
+import { globals } from "../globals.js"
 
 /**
  * Attach a network request tracker to a page.
@@ -102,11 +103,11 @@ export function attachNetworkTracker(page: Page): {
 			}
 
 			// Phase 1: wait for network requests to complete.
-			// Capped at 2s — if requests are still in-flight after that,
+			// Capped at 1s — if requests are still in-flight after that,
 			// they're likely prefetches or slow background requests.
 			const phase1Start = performance.now()
-			const networkDeadline = performance.now() + Math.min(timeoutMs, 2000)
-			const networkGrace = 200
+			const networkDeadline = performance.now() + Math.min(timeoutMs, 1000)
+			const networkGrace = 100
 			let quietSince = pending.size === 0 ? performance.now() : 0
 			while (performance.now() < networkDeadline) {
 				if (pending.size === 0) {
@@ -118,6 +119,13 @@ export function attachNetworkTracker(page: Page): {
 				await new Promise((r) => setTimeout(r, 50))
 			}
 			const phase1Duration = performance.now() - phase1Start
+
+			if (globals.debug && pending.size > 0) {
+				console.log(`      [net] Phase 1 timed out with ${String(pending.size)} pending:`)
+				for (const req of pending) {
+					console.log(`        ${req.resourceType()} ${req.url().slice(0, 120)}`)
+				}
+			}
 
 			// Phase 2: wait for DOM content to stabilize.
 			// Use textContent (not innerText) because some frameworks

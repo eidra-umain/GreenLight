@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.5] - 2026-03-20
+
+Faster network idle detection.
+
+### Changed
+
+- **Tighter network idle timeouts** — Phase 1 (network) cap reduced from 2s to 1s and grace period from 200ms to 100ms, reducing idle overhead on pages with slow background requests.
+
 ## [0.7.4] - 2026-03-20
 
 Performance and reliability improvements for cached plan runs.
