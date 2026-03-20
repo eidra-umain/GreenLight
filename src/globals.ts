@@ -24,6 +24,8 @@ import type { TraceLogger } from "./pilot/trace.js"
 export const globals = {
 	/** Verbose debug output (--debug). */
 	debug: false,
+	/** Granular performance timing (--perf). */
+	perf: false,
 	/** Trace logger instance (--trace). Always present; no-op when tracing is disabled. */
 	trace: {
 		log() { /* noop */ },
@@ -39,8 +41,10 @@ export const globals = {
  */
 export function initGlobals(opts: {
 	debug: boolean
+	perf: boolean
 	trace: TraceLogger
 }): void {
 	globals.debug = opts.debug
+	globals.perf = opts.perf
 	globals.trace = opts.trace
 }

@@ -153,6 +153,7 @@ greenlight run --timeout 15000          # per-step timeout (ms)
 greenlight run --model openai/gpt-4o    # override LLM model
 greenlight run --llm-base-url <url>     # use a different OpenAI-compatible API
 greenlight run --debug                  # verbose output (actions, LLM modes, timings)
+greenlight run --perf                   # per-step performance breakdown (idle, capture, llm, exec, settle)
 greenlight run --trace                  # timestamped browser events for perf analysis
 greenlight run --pilot                  # force pilot (LLM) run, ignore cached plans
 greenlight run --plan-status            # show cache status for all tests
@@ -178,7 +179,7 @@ GreenLight takes a different approach:
 
 ## Test syntax
 
-Tests are plain English. The Pilot interprets intent, so phrasing is flexible. Each plain english descriptions are borken down to one or several actions from the underlying core action set. Quick reference:
+Tests are plain English. The Pilot interprets intent, so phrasing is flexible. Plain english descriptions are broken down to one or several actions from the underlying core action set. Quick reference:
 
 | Action | Example |
 |--------|---------|

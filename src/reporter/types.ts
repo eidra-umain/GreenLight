@@ -117,6 +117,10 @@ export interface StepTiming {
 	execute: number
 	/** Time to capture post-action state in ms. */
 	postCapture: number
+	/** Time waiting for network idle before the step in ms. */
+	networkIdle?: number
+	/** Time waiting for page to settle after the action in ms. */
+	settle?: number
 }
 
 /** Result of a single step within a test case. */

@@ -214,6 +214,50 @@ async function executeHeuristicStep(
 				break
 			}
 
+			case "clear": {
+				if (!step.selector) throw new Error("clear step requires a selector")
+				const locator = buildLocator(page, step.selector, hintText)
+				const clearTag = await locator.evaluate((el) => el.tagName.toLowerCase()).catch(() => "")
+				const clearRole = await locator.getAttribute("role").catch(() => null)
+				const isClearInput = clearTag === "input" || clearTag === "textarea" || clearRole === "textbox" || clearRole === "combobox"
+
+				if (isClearInput) {
+					await locator.click({ force: true })
+					const selectAll = process.platform === "darwin" ? "Meta+a" : "Control+a"
+					await page.keyboard.press(selectAll)
+					await page.keyboard.press("Backspace")
+				} else {
+					// Non-input element (filter chip, dropdown, etc.):
+					// look for a clear/remove/close button within or nearby.
+					const clearPatterns = /\b(clear|close|remove|delete|reset|rensa|ta bort|×|✕|✖|🗙)\b/i
+					const inner = locator.locator("button, [role='button']")
+					const parent = locator.locator("..")
+					const parentButtons = parent.locator("button, [role='button']")
+					const allButtons = [
+						...(await inner.all()),
+						...(await parentButtons.all()),
+					]
+					let cleared = false
+					for (const btn of allButtons) {
+						const label = await btn.getAttribute("aria-label").catch(() => "") ?? ""
+						const text = await btn.textContent().catch(() => "") ?? ""
+						const title = await btn.getAttribute("title").catch(() => "") ?? ""
+						if (clearPatterns.test(label) || clearPatterns.test(text) || clearPatterns.test(title)) {
+							await btn.click()
+							cleared = true
+							break
+						}
+					}
+					if (!cleared) {
+						await locator.click()
+					}
+				}
+				if (globals.debug) {
+					console.log(`      [cached:clear] Cleared ${isClearInput ? "input" : "non-input"} element (${clearTag}/${clearRole ?? "none"})`)
+				}
+				break
+			}
+
 			case "check": {
 				if (!step.selector) throw new Error("check step requires a selector")
 				const locator = buildLocator(page, step.selector, hintText)
@@ -447,10 +491,15 @@ export async function runCachedPlan(
 		const step = queue[queueIndex]
 		queueIndex++
 		const stepStart = performance.now()
+		let networkIdleTime = 0
 
 		// Wait for async content to settle before interacting
-		if (options?.waitForNetworkIdle) {
-			await options.waitForNetworkIdle()
+		{
+			const t0 = performance.now()
+			if (options?.waitForNetworkIdle) {
+				await options.waitForNetworkIdle()
+			}
+			networkIdleTime = performance.now() - t0
 		}
 
 		// Handle conditional steps — evaluate condition and splice chosen branch
@@ -583,14 +632,8 @@ export async function runCachedPlan(
 
 		const result = await executeHeuristicStep(page, step, mapAdapter)
 
-		// Wait for the page to stabilize after mutating actions
-		// (click, type, select, etc.) so the next step sees a settled page.
-		if (result.success && step.action !== "assert") {
-			await page.waitForLoadState("domcontentloaded")
-			if (options?.waitForNetworkIdle) {
-				await options.waitForNetworkIdle()
-			}
-		}
+		// No post-step settle in the cached runner — the pre-step
+		// waitForNetworkIdle at the top of the loop handles it.
 
 		if (!result.success) {
 			drifted = true
@@ -649,6 +692,13 @@ export async function runCachedPlan(
 			},
 			status: "passed",
 			duration: performance.now() - stepStart,
+			timing: globals.perf ? {
+				capture: 0,
+				llm: 0,
+				execute: result.duration,
+				postCapture: 0,
+				networkIdle: networkIdleTime,
+			} : undefined,
 		})
 	}
 

@@ -16,7 +16,8 @@
       "Bash(chmod +x dist/cli/index.js)",
       "Bash(vitest)",
       "Bash(jest)",
-      "Bash(mocha \")"
+      "Bash(mocha \")",
+      "Read(//Users/jesper.weissglas/Comfort/code/comfort-frontend/**)"
     ]
   }
 }

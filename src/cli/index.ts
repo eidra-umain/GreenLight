@@ -60,6 +60,7 @@ program
 		"select a named deployment from greenlight.yaml",
 	)
 	.option("--debug", "enable verbose debug output", false)
+	.option("--perf", "show per-step performance breakdown", false)
 	.option(
 		"--trace",
 		"log timestamped browser events for performance analysis",
@@ -91,6 +92,7 @@ program
 				provider?: string
 				deployment?: string
 				debug: boolean
+				perf: boolean
 				trace: boolean
 				pilot: boolean
 				onDrift?: string
@@ -147,6 +149,7 @@ program
 			// Initialize global runtime state (debug, trace)
 			initGlobals({
 				debug: opts.debug,
+				perf: opts.perf,
 				trace: createTraceLogger(opts.trace),
 			})
 

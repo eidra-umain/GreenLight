@@ -477,6 +477,8 @@ export async function runTestCase(
 			llm: 0,
 			execute: 0,
 			postCapture: 0,
+			networkIdle: 0,
+			settle: 0,
 		}
 
 		// Inject random values into steps that mention "random"
@@ -502,10 +504,12 @@ export async function runTestCase(
 				action = plannedAction
 				trace.log("plan:hit", JSON.stringify(action))
 				if (action.ref) {
+					let t0 = performance.now()
 					if (options.waitForNetworkIdle) {
 						await options.waitForNetworkIdle()
 					}
-					const t0 = performance.now()
+					timing.networkIdle = performance.now() - t0
+					t0 = performance.now()
 					const state = await capturePageState(page, options.consoleDrain, {
 						mapAdapter: mapAdapter ?? undefined,
 					})
@@ -516,11 +520,13 @@ export async function runTestCase(
 				}
 			} else {
 				// Needs page state: wait for async requests to settle, then capture
+				let t0 = performance.now()
 				if (options.waitForNetworkIdle) {
 					await options.waitForNetworkIdle()
 				}
+				timing.networkIdle = performance.now() - t0
 				trace.log("capture:start")
-				let t0 = performance.now()
+				t0 = performance.now()
 				const state = await capturePageState(page, options.consoleDrain, {
 					mapAdapter: mapAdapter ?? undefined,
 				})
@@ -575,6 +581,9 @@ export async function runTestCase(
 			if (globals.debug) {
 				console.log(`      Action: ${JSON.stringify(action)}`)
 			}
+
+			// Snapshot URL before action so we can detect client-side navigation
+			const preActionUrl = page.url()
 
 			// Execute the action
 			trace.log("execute:start", action.action)
@@ -687,14 +696,29 @@ export async function runTestCase(
 				globals.valueStore.set(action.rememberAs, result.rememberedValue)
 			}
 
-			// Wait for the page to stabilize after mutating actions
-			// (click, type, select, etc.) so the next step sees a settled page.
-			// Assertions don't mutate the page, so skip for those.
-			if (action.action !== "assert") {
-				await page.waitForLoadState("domcontentloaded")
-				if (options.waitForNetworkIdle) {
-					await options.waitForNetworkIdle()
+			// Wait for navigation to complete after mutating actions.
+			// The full waitForNetworkIdle is handled by the pre-step idle
+			// wait at the start of the next iteration — no need to double-wait.
+			{
+				const settleStart = performance.now()
+				if (action.action !== "assert") {
+					await page.waitForLoadState("domcontentloaded")
 				}
+
+				// For actions that can trigger navigation (click, navigate),
+				// wait for the URL to update if it hasn't changed yet.
+				// Client-side routers (Next.js, React Router) may update
+				// the URL via pushState after the DOM has settled.
+				if (action.action === "click" || action.action === "navigate") {
+					const preUrl = preActionUrl
+					const postUrl = page.url()
+					if (preUrl && preUrl === postUrl) {
+						try {
+							await page.waitForURL((url) => url.href !== preUrl, { timeout: 3000 })
+						} catch { /* URL didn't change — that's fine, not all clicks navigate */ }
+					}
+				}
+				timing.settle = performance.now() - settleStart
 			}
 
 			// Capture post-action screenshot for reporting

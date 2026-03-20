@@ -60,9 +60,17 @@ function printStepResult(stepResult: StepResult): void {
 			: "\x1b[31m\u2717\x1b[0m"
 	const dur = `${String(Math.round(stepResult.duration))}ms`
 	const t = stepResult.timing
-	const phases = t
-		? ` \x1b[90m[capture:${String(Math.round(t.capture))} llm:${String(Math.round(t.llm))} exec:${String(Math.round(t.execute))} post:${String(Math.round(t.postCapture))}ms]\x1b[0m`
-		: ""
+	let phases = ""
+	if (t && globals.perf) {
+		const parts: string[] = []
+		if (t.networkIdle) parts.push(`idle:${String(Math.round(t.networkIdle))}`)
+		if (t.capture) parts.push(`capture:${String(Math.round(t.capture))}`)
+		if (t.llm) parts.push(`llm:${String(Math.round(t.llm))}`)
+		if (t.execute) parts.push(`exec:${String(Math.round(t.execute))}`)
+		if (t.postCapture) parts.push(`post:${String(Math.round(t.postCapture))}`)
+		if (t.settle) parts.push(`settle:${String(Math.round(t.settle))}`)
+		if (parts.length > 0) phases = ` \x1b[90m[${parts.join(" ")}ms]\x1b[0m`
+	}
 	// Strip internal "||" separator from datepick step names
 	const stepName = stepResult.step.includes("||") ? stepResult.step.split("||")[0] : stepResult.step
 	const condTag = stepResult.conditionResult
@@ -379,7 +387,7 @@ export async function runCommand(
 						}
 					} else {
 						// Pilot run — check for partial plan to resume from
-						const partialPlan = config.pilot
+						const partialPlan = config.pilot && globals.debug
 							? await loadPartialPlan(cwd, suiteSlug, testSlug)
 							: null
 						const hasPartial = partialPlan && partialPlan.sourceHash === testHash && partialPlan.steps.length > 0
@@ -441,7 +449,7 @@ export async function runCommand(
 								} else {
 									const completed3 = result.completedInputSteps ?? 0
 									const remaining3 = resumeSteps.slice(completed3)
-									if (remaining3.length > 0 && completed3 > 0) {
+									if (remaining3.length > 0 && completed3 > 0 && globals.debug) {
 										const partial = recorder3.finalizePartial(remaining3)
 										await savePartialPlan(cwd, partial)
 										await ensureGitignore(cwd)
@@ -493,7 +501,7 @@ export async function runCommand(
 							// Save partial plan so next run can resume from here
 							const completed = result.completedInputSteps ?? 0
 							const remaining = resumeSteps.slice(completed)
-							if (remaining.length > 0 && completed > 0) {
+							if (remaining.length > 0 && completed > 0 && globals.debug) {
 								const partial = recorder.finalizePartial(remaining)
 								await savePartialPlan(cwd, partial)
 								await ensureGitignore(cwd)
