@@ -50,7 +50,7 @@ export interface PlannedStep {
 
 const VALID_ACTIONS = new Set([
 	"click", "check", "uncheck", "type", "clear", "select", "autocomplete",
-	"scroll", "navigate", "press", "wait", "assert", "remember", "count",
+	"scroll", "navigate", "press", "wait", "assert", "remember", "count", "upload",
 ])
 
 /**
@@ -130,6 +130,7 @@ export function parseActionResponse(raw: string): Action {
 	} else {
 		action.ref = extractParam(cleaned, "ref")
 		action.text = extractParam(cleaned, "text")
+		action.testid = extractParam(cleaned, "testid")
 		action.value = extractParam(cleaned, "value")
 		action.option = extractParam(cleaned, "option")
 	}

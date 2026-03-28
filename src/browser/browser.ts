@@ -65,6 +65,7 @@ export async function createContext(
 ): Promise<BrowserContext> {
 	return browser.newContext({
 		viewport: config.viewport,
+		permissions: ["clipboard-read", "clipboard-write"],
 	})
 }
 
@@ -110,6 +111,7 @@ export async function launchPersistentContextWithZoom(
 	const context = await chromium.launchPersistentContext(userDataDir, {
 		headless: false,
 		viewport: config.viewport,
+		permissions: ["clipboard-read", "clipboard-write"],
 		args: [
 			...CHROMIUM_ARGS,
 			`--window-size=${String(width)},${String(height)}`,

@@ -42,6 +42,8 @@ export interface HeuristicStep {
 	selector?: HeuristicSelector
 	/** Value: text to type, URL to navigate, key to press, scroll direction, etc. */
 	value?: string
+	/** data-testid attribute value for direct element targeting (used by upload). */
+	testid?: string
 	/** For autocomplete actions: the specific suggestion to select. */
 	option?: string
 	/** For remember actions: the variable name to store the captured value. */
