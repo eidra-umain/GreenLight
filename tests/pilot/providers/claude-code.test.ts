@@ -94,13 +94,13 @@ describe("createClaudeCodeProvider", () => {
 		const call = mockSpawnSync.mock.calls[0]
 		const args = call[1] as string[]
 
-		expect(args[args.indexOf("-s") + 1]).toBe("You are a browser automation AI.")
+		expect(args[args.indexOf("--system-prompt") + 1]).toBe("You are a browser automation AI.")
 
 		const promptArg = args[args.indexOf("-p") + 1]
 		expect(promptArg).not.toContain("You are a browser automation AI.")
-		expect(promptArg).toContain("Human: click the login button")
-		expect(promptArg).toContain("Assistant: click ref=e1")
-		expect(promptArg).toContain("Human: check the page title")
+		expect(promptArg).toContain("click the login button")
+		expect(promptArg).toContain("click ref=e1")
+		expect(promptArg).toContain("check the page title")
 	})
 
 	it("throws a descriptive Error when claude binary is not found", async () => {

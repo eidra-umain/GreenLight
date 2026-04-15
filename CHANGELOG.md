@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-04-15
+
+Claude Code as LLM provider.
+
+### Added
+
+- **Claude Code provider** -- use the Claude Code CLI as a local LLM provider with `provider: claude-code`. No API key needed, runs as a subprocess.
+
+### Fixed
+
+- **Response parser** -- improved raw response parsing to handle LLM output that includes extra text around the JSON action.
+
 ## [0.7.7] - 2026-03-23
 
 Documentation updates.

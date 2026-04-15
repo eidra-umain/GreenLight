@@ -377,7 +377,7 @@ export function parsePlanResponse(raw: string): PlannedStep[] {
 	return raw
 		.trim()
 		.split("\n")
-		.filter((l) => l.startsWith("#")) // removes any unintented LLM fluff
+		.filter((l) => l.trim().length > 0)
 		.map((line) => {
 			// Extract optional "#N " input step index prefix
 			let trimmedLine = line.trim()

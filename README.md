@@ -603,7 +603,7 @@ The same key is used regardless of provider. `OPENROUTER_API_KEY` is also accept
 
 ### Providers
 
-GreenLight supports four LLM providers with native API integrations:
+GreenLight supports five LLM providers with native API integrations:
 
 | Provider | Value | API |
 |----------|-------|-----|
@@ -611,6 +611,7 @@ GreenLight supports four LLM providers with native API integrations:
 | [OpenAI](https://platform.openai.com) | `openai` | GPT-4o, GPT-4o-mini, etc. |
 | [Google Gemini](https://ai.google.dev) | `gemini` | Gemini 2.5 Flash, Pro, etc. |
 | [Anthropic Claude](https://console.anthropic.com) | `claude` | Claude Sonnet, Haiku, etc. |
+| Claude Code CLI | `claude-code` | Uses the local Claude Code CLI as a subprocess. No API key needed. |
 
 Set the provider in `greenlight.yaml` or via CLI:
 
