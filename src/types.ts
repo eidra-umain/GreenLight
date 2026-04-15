@@ -25,7 +25,7 @@ export interface Viewport {
 }
 
 /** Supported LLM provider identifiers. */
-export type Provider = "openrouter" | "openai" | "gemini" | "claude"
+export type Provider = "openrouter" | "openai" | "gemini" | "claude" | "claude-code"
 
 /** Per-role model configuration (planner vs pilot can use different models). */
 export interface ModelConfig {
