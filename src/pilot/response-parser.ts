@@ -370,41 +370,63 @@ function parsePlanAction(token: string): {
 }
 
 /**
- * Parse the planning LLM response (line-based format) into a flat list of PlannedSteps.
- * One line per action — compound input steps produce multiple lines.
+ * Parse the planning LLM response into a flat list of PlannedSteps.
+ * handling the main steps, which are numbered but can contain fluff
  */
-export function parsePlanResponse(raw: string): PlannedStep[] {
-	return raw
+export function parseBasePlanResponse(raw: string): PlannedStep[] {
+	const lines = raw
+		.trim()
+		.split("\n")
+		.filter((l) => l.startsWith("#"))
+
+	return parseResponseToPlannedSteps(lines)
+}
+
+/**
+ * Parse the planning LLM response into a flat list of PlannedSteps.
+ * handling the expanded steps, in raw string format
+ */
+export function parseExpandedPlanResponse(raw: string): PlannedStep[] {
+	const lines = raw
 		.trim()
 		.split("\n")
 		.filter((l) => l.trim().length > 0)
-		.map((line) => {
-			// Extract optional "#N " input step index prefix
-			let trimmedLine = line.trim()
-			let inputStepIndex: number | undefined
-			const indexMatch = /^#(\d+)\s+/.exec(trimmedLine)
-			if (indexMatch) {
-				inputStepIndex = parseInt(indexMatch[1], 10) - 1 // convert 1-based to 0-based
-				trimmedLine = trimmedLine.slice(indexMatch[0].length)
-			}
 
-			const { action, description, needsExpansion, needsDatePick, needsMapDetect, needsCount, rememberAs, compare, condition, thenBranch, elseBranch } = parsePlanAction(trimmedLine)
-			const step = description ?? trimmedLine
-			return {
-				step,
-				action,
-				...(needsExpansion ? { needsExpansion: true } : {}),
-				...(needsDatePick ? { needsDatePick: true } : {}),
-				...(needsMapDetect ? { needsMapDetect: true } : {}),
-				...(needsCount ? { needsCount: true } : {}),
-				...(rememberAs ? { rememberAs } : {}),
-				...(compare ? { compare } : {}),
-				...(condition ? { condition } : {}),
-				...(thenBranch ? { thenBranch } : {}),
-				...(elseBranch ? { elseBranch } : {}),
-				...(inputStepIndex != null ? { inputStepIndex } : {}),
-			}
-		})
+	return parseResponseToPlannedSteps(lines)
+}
+
+/**
+ * Parse the planning LLM response (line-based format) into a flat list of PlannedSteps.
+ * One line per action — compound input steps produce multiple lines.
+ */
+function parseResponseToPlannedSteps(raw: string[]): PlannedStep[] {
+	return raw.map((line) => {
+		// Extract optional "#N " input step index prefix
+		let trimmedLine = line.trim()
+		let inputStepIndex: number | undefined
+		const indexMatch = /^#(\d+)\s+/.exec(trimmedLine)
+		if (indexMatch) {
+			inputStepIndex = parseInt(indexMatch[1], 10) - 1 // convert 1-based to 0-based
+			trimmedLine = trimmedLine.slice(indexMatch[0].length)
+		}
+
+		const { action, description, needsExpansion, needsDatePick, needsMapDetect, needsCount, rememberAs, compare, condition, thenBranch, elseBranch } = parsePlanAction(trimmedLine)
+		const step = description ?? trimmedLine
+		return {
+			step,
+			action,
+			...(needsExpansion ? { needsExpansion: true } : {}),
+			...(needsDatePick ? { needsDatePick: true } : {}),
+			...(needsMapDetect ? { needsMapDetect: true } : {}),
+			...(needsCount ? { needsCount: true } : {}),
+			...(rememberAs ? { rememberAs } : {}),
+			...(compare ? { compare } : {}),
+			...(condition ? { condition } : {}),
+			...(thenBranch ? { thenBranch } : {}),
+			...(elseBranch ? { elseBranch } : {}),
+			...(inputStepIndex != null ? { inputStepIndex } : {}),
+		}
+	})
 }
 
 /** Operator patterns for extracting comparison info from natural language. */

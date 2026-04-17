@@ -33,7 +33,7 @@ import {
 	EXPAND_SYSTEM_PROMPT,
 } from "./prompts.js"
 import { buildUserMessage, buildCompactMessage, formatLocalTime } from "./message-builder.js"
-import { parseActionResponse, parsePlanResponse } from "./response-parser.js"
+import { parseActionResponse, parseBasePlanResponse, parseExpandedPlanResponse } from "./response-parser.js"
 import type { PlannedStep } from "./response-parser.js"
 import type { ChatMessage, LLMProvider } from "./providers/index.js"
 import { createProvider, LLMApiError } from "./providers/index.js"
@@ -148,7 +148,7 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 				config.plannerModel,
 			)
 
-			return parsePlanResponse(content)
+			return parseBasePlanResponse(content)
 		},
 
 		async evaluateCondition(
@@ -296,7 +296,7 @@ export function createLLMClient(config: LLMClientConfig): LLMClient {
 				}
 			}
 
-			const expanded = parsePlanResponse(content)
+			const expanded = parseExpandedPlanResponse(content)
 
 			if (globals.debug) {
 				console.log(

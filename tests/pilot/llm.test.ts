@@ -21,7 +21,7 @@ import {
 	createLLMClient,
 } from "../../src/pilot/llm.js"
 import { buildUserMessage, buildMessages } from "../../src/pilot/message-builder.js"
-import { parseActionResponse, parsePlanResponse } from "../../src/pilot/response-parser.js"
+import { parseActionResponse, parseExpandedPlanResponse } from "../../src/pilot/response-parser.js"
 import { SYSTEM_PROMPT } from "../../src/pilot/prompts.js"
 import type { PageState } from "../../src/reporter/types.js"
 import type { RunConfig } from "../../src/types.js"
@@ -348,10 +348,10 @@ describe("createLLMClient", () => {
 
 	it("planSteps sends all steps and parses response", async () => {
 		const planText = [
-			'PAGE "click Sign In"',
-			'assert contains_text "Welcome"',
-			'navigate "/about"',
-			'PAGE "type hello into the search field"',
+			'#1 PAGE "click Sign In"',
+			'#2 assert contains_text "Welcome"',
+			'#3 navigate "/about"',
+			'#4 PAGE "type hello into the search field"',
 		].join("\n")
 
 		const provider = createMockProvider(() => planText)
@@ -371,7 +371,7 @@ describe("createLLMClient", () => {
 		])
 
 		expect(plan).toHaveLength(4)
-		expect(plan[0]).toEqual({ step: "click Sign In", action: null })
+		expect(plan[0]).toEqual({ step: "click Sign In", action: null, inputStepIndex: 0 })
 		expect(plan[1].action).toEqual({
 			action: "assert",
 			assertion: { type: "contains_text", expected: "Welcome" },
@@ -518,7 +518,7 @@ describe("createLLMClient", () => {
 	})
 })
 
-describe("parsePlanResponse", () => {
+describe("parseExpandedPlanResponse", () => {
 	it("parses one action per line", () => {
 		const raw = [
 			'PAGE "search for tern"',
@@ -526,7 +526,7 @@ describe("parsePlanResponse", () => {
 			'navigate "/about"',
 			'press "Enter"',
 		].join("\n")
-		const result = parsePlanResponse(raw)
+		const result = parseExpandedPlanResponse(raw)
 		expect(result).toHaveLength(4)
 		expect(result[0]).toEqual({ step: "search for tern", action: null })
 		expect(result[1]).toEqual({
@@ -552,7 +552,7 @@ describe("parsePlanResponse", () => {
 			'PAGE "click Ventilation in the form"',
 			'PAGE "click Kylteknik in the form"',
 		].join("\n")
-		const result = parsePlanResponse(raw)
+		const result = parseExpandedPlanResponse(raw)
 		expect(result).toHaveLength(3)
 		expect(result[0].step).toBe("click Företag in the form")
 		expect(result[1].step).toBe("click Ventilation in the form")
@@ -561,7 +561,7 @@ describe("parsePlanResponse", () => {
 	})
 
 	it("uses raw line as step label for non-PAGE actions", () => {
-		const result = parsePlanResponse('assert field_exists "Email"')
+		const result = parseExpandedPlanResponse('assert field_exists "Email"')
 		expect(result[0].step).toBe('assert field_exists "Email"')
 	})
 
@@ -575,7 +575,7 @@ describe("parsePlanResponse", () => {
 			'assert link_exists "/"',
 			'assert field_exists "Email"',
 		].join("\n")
-		const result = parsePlanResponse(raw)
+		const result = parseExpandedPlanResponse(raw)
 		expect(result[0].action?.assertion?.type).toBe("contains_text")
 		expect(result[1].action?.assertion?.type).toBe("not_contains_text")
 		expect(result[2].action?.assertion?.type).toBe("url_contains")
@@ -586,25 +586,25 @@ describe("parsePlanResponse", () => {
 	})
 
 	it("parses scroll action", () => {
-		const result = parsePlanResponse('scroll "down"')
+		const result = parseExpandedPlanResponse('scroll "down"')
 		expect(result[0].action).toEqual({ action: "scroll", value: "down" })
 	})
 
 	it("parses PAGE with unquoted description", () => {
-		const result = parsePlanResponse('PAGE click the Sign In button')
+		const result = parseExpandedPlanResponse('PAGE click the Sign In button')
 		expect(result[0].action).toBeNull()
 		expect(result[0].step).toBe("click the Sign In button")
 	})
 
 	it("treats unrecognized tokens as PAGE without description", () => {
-		const result = parsePlanResponse("something weird")
+		const result = parseExpandedPlanResponse("something weird")
 		expect(result[0].action).toBeNull()
 		expect(result[0].step).toBe("something weird")
 	})
 
 	it("ignores blank lines", () => {
 		const raw = 'PAGE "click A"\n\nPAGE "click B"\n'
-		const result = parsePlanResponse(raw)
+		const result = parseExpandedPlanResponse(raw)
 		expect(result).toHaveLength(2)
 	})
 })

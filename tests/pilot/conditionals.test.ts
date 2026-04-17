@@ -15,13 +15,13 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { describe, it, expect } from "vitest"
-import { parsePlanResponse } from "../../src/pilot/response-parser.js"
+import { parseBasePlanResponse, parseExpandedPlanResponse } from "../../src/pilot/response-parser.js"
 
 // ── IF_VISIBLE / IF_CONTAINS / IF_URL ────────────────────────────────
 
-describe("parsePlanResponse — conditionals", () => {
+describe("parseExpandedPlanResponse — conditionals", () => {
 	it("parses IF_VISIBLE with THEN", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'IF_VISIBLE "Accept cookies" THEN PAGE "click Accept cookies"',
 		)
 		expect(result).toHaveLength(1)
@@ -32,7 +32,7 @@ describe("parsePlanResponse — conditionals", () => {
 	})
 
 	it("parses IF_VISIBLE with THEN and ELSE", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'IF_VISIBLE "Out of stock" THEN PAGE "click Notify me" ELSE PAGE "click Add to cart"',
 		)
 		expect(result).toHaveLength(1)
@@ -42,7 +42,7 @@ describe("parsePlanResponse — conditionals", () => {
 	})
 
 	it("parses IF_CONTAINS", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'IF_CONTAINS "Welcome" THEN assert contains_text "Welcome"',
 		)
 		expect(result[0].condition?.type).toBe("contains")
@@ -51,7 +51,7 @@ describe("parsePlanResponse — conditionals", () => {
 	})
 
 	it("parses IF_URL", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'IF_URL "/login" THEN assert contains_text "Sign in"',
 		)
 		expect(result[0].condition?.type).toBe("url")
@@ -59,14 +59,14 @@ describe("parsePlanResponse — conditionals", () => {
 	})
 
 	it("is case-insensitive", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'if_visible "Skip" THEN PAGE "click Skip"',
 		)
 		expect(result[0].condition?.type).toBe("visible")
 	})
 
 	it("handles pre-resolved THEN actions", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'IF_VISIBLE "Submit" THEN navigate "/home"',
 		)
 		expect(result[0].thenBranch?.[0].action?.action).toBe("navigate")
@@ -76,9 +76,9 @@ describe("parsePlanResponse — conditionals", () => {
 
 // ── Multiple conditionals with same condition ────────────────────────
 
-describe("parsePlanResponse — multiple conditionals", () => {
+describe("parseExpandedPlanResponse — multiple conditionals", () => {
 	it("parses multiple lines with the same condition", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			[
 				'IF_VISIBLE "password" THEN PAGE "type secret into the password field"',
 				'IF_VISIBLE "password" THEN PAGE "click the unlock button"',
@@ -92,9 +92,9 @@ describe("parsePlanResponse — multiple conditionals", () => {
 
 // ── DATEPICK ─────────────────────────────────────────────────────────
 
-describe("parsePlanResponse — DATEPICK", () => {
+describe("parseExpandedPlanResponse — DATEPICK", () => {
 	it("parses DATEPICK with description and time expression", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'DATEPICK "set the start time to 10 minutes from now" "10 minutes from now"',
 		)
 		expect(result).toHaveLength(1)
@@ -103,7 +103,7 @@ describe("parsePlanResponse — DATEPICK", () => {
 	})
 
 	it("parses DATEPICK with single quoted string (fallback)", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'DATEPICK "set the date to tomorrow"',
 		)
 		expect(result[0].needsDatePick).toBe(true)
@@ -113,9 +113,9 @@ describe("parsePlanResponse — DATEPICK", () => {
 
 // ── ASSERT_REMEMBERED ────────────────────────────────────────────────
 
-describe("parsePlanResponse — ASSERT_REMEMBERED", () => {
+describe("parseExpandedPlanResponse — ASSERT_REMEMBERED", () => {
 	it("parses ASSERT_REMEMBERED into a contains_remembered assertion", () => {
-		const result = parsePlanResponse('ASSERT_REMEMBERED "booking_name"')
+		const result = parseExpandedPlanResponse('ASSERT_REMEMBERED "booking_name"')
 		expect(result).toHaveLength(1)
 		expect(result[0].action?.action).toBe("assert")
 		expect(result[0].action?.assertion?.type).toBe("contains_remembered")
@@ -126,9 +126,9 @@ describe("parsePlanResponse — ASSERT_REMEMBERED", () => {
 
 // ── #N input step index prefix ───────────────────────────────────────
 
-describe("parsePlanResponse — #N prefix", () => {
+describe("parseBasePlanResponse — #N prefix", () => {
 	it("extracts input step index from #N prefix", () => {
-		const result = parsePlanResponse(
+		const result = parseBasePlanResponse(
 			[
 				'#1 PAGE "click Sign in"',
 				'#2 PAGE "type email"',
@@ -143,19 +143,19 @@ describe("parsePlanResponse — #N prefix", () => {
 		expect(result[3].inputStepIndex).toBe(2)
 	})
 
-	it("works without #N prefix (inputStepIndex undefined)", () => {
-		const result = parsePlanResponse('PAGE "click button"')
-		expect(result[0].inputStepIndex).toBeUndefined()
+	it("filters out lines without #N prefix", () => {
+		const result = parseBasePlanResponse('PAGE "click button"')
+		expect(result).toHaveLength(0)
 	})
 
 	it("strips the #N prefix from the step text", () => {
-		const result = parsePlanResponse('#1 PAGE "click the button"')
+		const result = parseBasePlanResponse('#1 PAGE "click the button"')
 		expect(result[0].step).toBe("click the button")
 		expect(result[0].action).toBeNull()
 	})
 
 	it("works with conditional steps", () => {
-		const result = parsePlanResponse(
+		const result = parseBasePlanResponse(
 			'#3 IF_VISIBLE "Skip" THEN PAGE "click Skip"',
 		)
 		expect(result[0].inputStepIndex).toBe(2)
@@ -163,10 +163,18 @@ describe("parsePlanResponse — #N prefix", () => {
 	})
 
 	it("works with DATEPICK", () => {
-		const result = parsePlanResponse(
+		const result = parseBasePlanResponse(
 			'#5 DATEPICK "set start to tomorrow" "tomorrow"',
 		)
 		expect(result[0].inputStepIndex).toBe(4)
 		expect(result[0].needsDatePick).toBe(true)
+	})
+
+	it("filters out LLM fluff lines", () => {
+		const raw = 'Here are the steps:\n#1 PAGE "click Sign In"\n#2 assert contains_text "Welcome"\nLet me know if you need anything else.'
+		const result = parseBasePlanResponse(raw)
+		expect(result).toHaveLength(2)
+		expect(result[0].step).toBe("click Sign In")
+		expect(result[1].action?.assertion?.type).toBe("contains_text")
 	})
 })

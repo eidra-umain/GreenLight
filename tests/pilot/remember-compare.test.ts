@@ -15,15 +15,15 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { describe, it, expect } from "vitest"
-import { parseActionResponse, parsePlanResponse, validatePlanReferences, extractComparisonFromText } from "../../src/pilot/response-parser.js"
+import { parseActionResponse, parseExpandedPlanResponse, validatePlanReferences, extractComparisonFromText } from "../../src/pilot/response-parser.js"
 import { buildCompactMessage } from "../../src/pilot/message-builder.js"
 import type { PageState } from "../../src/reporter/types.js"
 
-// ── parsePlanResponse: REMEMBER / COMPARE ────────────────────────────
+// ── parseExpandedPlanResponse: REMEMBER / COMPARE ────────────────────────────
 
-describe("parsePlanResponse — REMEMBER", () => {
+describe("parseExpandedPlanResponse — REMEMBER", () => {
 	it("parses a REMEMBER line", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'REMEMBER "the number of products shown" as "product_count"',
 		)
 		expect(result).toHaveLength(1)
@@ -33,7 +33,7 @@ describe("parsePlanResponse — REMEMBER", () => {
 	})
 
 	it("parses REMEMBER case-insensitively", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'remember "total price" as "price"',
 		)
 		expect(result[0].rememberAs).toBe("price")
@@ -41,14 +41,14 @@ describe("parsePlanResponse — REMEMBER", () => {
 	})
 
 	it("does not set rememberAs on non-REMEMBER steps", () => {
-		const result = parsePlanResponse('PAGE "click the button"')
+		const result = parseExpandedPlanResponse('PAGE "click the button"')
 		expect(result[0].rememberAs).toBeUndefined()
 	})
 })
 
-describe("parsePlanResponse — COMPARE", () => {
+describe("parseExpandedPlanResponse — COMPARE", () => {
 	it("parses a COMPARE line as null action with compare metadata", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'COMPARE "the number of products shown" "less_than" remembered "product_count"',
 		)
 		expect(result).toHaveLength(1)
@@ -71,7 +71,7 @@ describe("parsePlanResponse — COMPARE", () => {
 			"greater_or_equal",
 		]
 		for (const op of operators) {
-			const result = parsePlanResponse(
+			const result = parseExpandedPlanResponse(
 				`COMPARE "value" "${op}" remembered "var"`,
 			)
 			expect(result[0].compare!.operator).toBe(op)
@@ -79,7 +79,7 @@ describe("parsePlanResponse — COMPARE", () => {
 	})
 
 	it("parses COMPARE case-insensitively", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'compare "count" "greater_than" remembered "old_count"',
 		)
 		expect(result[0].compare!.variable).toBe("old_count")
@@ -87,14 +87,14 @@ describe("parsePlanResponse — COMPARE", () => {
 	})
 })
 
-describe("parsePlanResponse — mixed plan with REMEMBER/COMPARE", () => {
+describe("parseExpandedPlanResponse — mixed plan with REMEMBER/COMPARE", () => {
 	it("parses a full plan with remember and compare", () => {
 		const raw = [
 			'REMEMBER "the result count" as "count_before"',
 			'PAGE "select Red in the color filter"',
 			'COMPARE "the result count" "less_than" remembered "count_before"',
 		].join("\n")
-		const result = parsePlanResponse(raw)
+		const result = parseExpandedPlanResponse(raw)
 		expect(result).toHaveLength(3)
 
 		// REMEMBER
@@ -113,11 +113,11 @@ describe("parsePlanResponse — mixed plan with REMEMBER/COMPARE", () => {
 	})
 })
 
-// ── parsePlanResponse: COMPARE_VALUE ─────────────────────────────────
+// ── parseExpandedPlanResponse: COMPARE_VALUE ─────────────────────────────────
 
-describe("parsePlanResponse — COMPARE_VALUE", () => {
+describe("parseExpandedPlanResponse — COMPARE_VALUE", () => {
 	it("parses a COMPARE_VALUE line with literal", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'COMPARE_VALUE "the count of products shown" "greater_than" "0"',
 		)
 		expect(result).toHaveLength(1)
@@ -131,7 +131,7 @@ describe("parsePlanResponse — COMPARE_VALUE", () => {
 	})
 
 	it("parses COMPARE_VALUE case-insensitively", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'compare_value "the number of items" "equal" "5"',
 		)
 		expect(result[0].compare).toEqual({
@@ -151,7 +151,7 @@ describe("parsePlanResponse — COMPARE_VALUE", () => {
 			"greater_or_equal",
 		]
 		for (const op of operators) {
-			const result = parsePlanResponse(
+			const result = parseExpandedPlanResponse(
 				`COMPARE_VALUE "value" "${op}" "10"`,
 			)
 			expect(result[0].compare!.operator).toBe(op)
@@ -165,18 +165,18 @@ describe("parsePlanResponse — COMPARE_VALUE", () => {
 			'PAGE "wait for products to load"',
 			'COMPARE_VALUE "the count of products shown" "greater_than" "0"',
 		].join("\n")
-		const result = parsePlanResponse(raw)
+		const result = parseExpandedPlanResponse(raw)
 		expect(result).toHaveLength(3)
 		expect(result[2].compare!.literal).toBe("0")
 		expect(result[2].compare!.operator).toBe("greater_than")
 	})
 })
 
-// ── parsePlanResponse: assert numeric ────────────────────────────────
+// ── parseExpandedPlanResponse: assert numeric ────────────────────────────────
 
-describe("parsePlanResponse — assert numeric", () => {
+describe("parseExpandedPlanResponse — assert numeric", () => {
 	it("parses assert numeric and extracts comparison from text", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'assert numeric "check that the count of products shown is greater than 0"',
 		)
 		expect(result).toHaveLength(1)
@@ -189,7 +189,7 @@ describe("parsePlanResponse — assert numeric", () => {
 	})
 
 	it("parses assert numeric with 'at least'", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'assert numeric "verify there are at least 5 results"',
 		)
 		expect(result[0].compare).toEqual({
@@ -200,7 +200,7 @@ describe("parsePlanResponse — assert numeric", () => {
 	})
 
 	it("falls back to PAGE-like when no comparison found", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'assert numeric "check that products are displayed"',
 		)
 		expect(result[0].compare).toBeUndefined()
@@ -214,7 +214,7 @@ describe("parsePlanResponse — assert numeric", () => {
 			'PAGE "click on the first product"',
 			'assert contains_text "Din varukorg är tom"',
 		].join("\n")
-		const result = parsePlanResponse(raw)
+		const result = parseExpandedPlanResponse(raw)
 		expect(result).toHaveLength(4)
 		expect(result[0].action).toBeNull() // PAGE
 		expect(result[1].compare!.operator).toBe("greater_than")
@@ -224,11 +224,11 @@ describe("parsePlanResponse — assert numeric", () => {
 	})
 })
 
-// ── parsePlanResponse: COMPARE_VALUE simple syntax ───────────────────
+// ── parseExpandedPlanResponse: COMPARE_VALUE simple syntax ───────────────────
 
-describe("parsePlanResponse — COMPARE_VALUE simple syntax", () => {
+describe("parseExpandedPlanResponse — COMPARE_VALUE simple syntax", () => {
 	it("parses simple COMPARE_VALUE and extracts operator + literal from text", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'COMPARE_VALUE "check that the count of products shown is greater than 0"',
 		)
 		expect(result).toHaveLength(1)
@@ -241,7 +241,7 @@ describe("parsePlanResponse — COMPARE_VALUE simple syntax", () => {
 	})
 
 	it("extracts 'at least' as greater_or_equal", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'COMPARE_VALUE "verify there are at least 3 results"',
 		)
 		expect(result[0].compare).toEqual({
@@ -252,7 +252,7 @@ describe("parsePlanResponse — COMPARE_VALUE simple syntax", () => {
 	})
 
 	it("extracts 'less than' operator", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'COMPARE_VALUE "check that the count is less than 10"',
 		)
 		expect(result[0].compare).toEqual({
@@ -263,7 +263,7 @@ describe("parsePlanResponse — COMPARE_VALUE simple syntax", () => {
 	})
 
 	it("extracts 'equals' operator", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'COMPARE_VALUE "check that the number of items equals 5"',
 		)
 		expect(result[0].compare).toEqual({
@@ -274,7 +274,7 @@ describe("parsePlanResponse — COMPARE_VALUE simple syntax", () => {
 	})
 
 	it("falls back to PAGE-like step when no comparison found in text", () => {
-		const result = parsePlanResponse(
+		const result = parseExpandedPlanResponse(
 			'COMPARE_VALUE "check that products are shown"',
 		)
 		expect(result[0].compare).toBeUndefined()
@@ -334,7 +334,7 @@ describe("extractComparisonFromText", () => {
 
 describe("validatePlanReferences", () => {
 	it("returns no errors for valid plan", () => {
-		const plan = parsePlanResponse([
+		const plan = parseExpandedPlanResponse([
 			'REMEMBER "count" as "before_count"',
 			'PAGE "click filter"',
 			'COMPARE "count" "less_than" remembered "before_count"',
@@ -343,7 +343,7 @@ describe("validatePlanReferences", () => {
 	})
 
 	it("returns error when COMPARE references missing REMEMBER", () => {
-		const plan = parsePlanResponse(
+		const plan = parseExpandedPlanResponse(
 			'COMPARE "count" "less_than" remembered "nonexistent"',
 		)
 		const errors = validatePlanReferences(plan)
@@ -352,7 +352,7 @@ describe("validatePlanReferences", () => {
 	})
 
 	it("returns error when COMPARE appears before its REMEMBER", () => {
-		const plan = parsePlanResponse([
+		const plan = parseExpandedPlanResponse([
 			'COMPARE "count" "less_than" remembered "total"',
 			'REMEMBER "count" as "total"',
 		].join("\n"))
@@ -362,7 +362,7 @@ describe("validatePlanReferences", () => {
 	})
 
 	it("handles multiple REMEMBER/COMPARE pairs", () => {
-		const plan = parsePlanResponse([
+		const plan = parseExpandedPlanResponse([
 			'REMEMBER "price" as "price_before"',
 			'REMEMBER "count" as "count_before"',
 			'PAGE "apply filter"',
@@ -373,7 +373,7 @@ describe("validatePlanReferences", () => {
 	})
 
 	it("returns no errors for plan with no COMPARE steps", () => {
-		const plan = parsePlanResponse([
+		const plan = parseExpandedPlanResponse([
 			'PAGE "click button"',
 			'assert contains_text "Hello"',
 		].join("\n"))
@@ -381,21 +381,21 @@ describe("validatePlanReferences", () => {
 	})
 
 	it("allows REMEMBER without matching COMPARE (unused is fine)", () => {
-		const plan = parsePlanResponse(
+		const plan = parseExpandedPlanResponse(
 			'REMEMBER "count" as "unused_var"',
 		)
 		expect(validatePlanReferences(plan)).toEqual([])
 	})
 
 	it("returns no errors for COMPARE_VALUE (literal, no REMEMBER needed)", () => {
-		const plan = parsePlanResponse(
+		const plan = parseExpandedPlanResponse(
 			'COMPARE_VALUE "product count" "greater_than" "0"',
 		)
 		expect(validatePlanReferences(plan)).toEqual([])
 	})
 
 	it("handles mix of COMPARE and COMPARE_VALUE", () => {
-		const plan = parsePlanResponse([
+		const plan = parseExpandedPlanResponse([
 			'REMEMBER "count" as "before_count"',
 			'PAGE "apply filter"',
 			'COMPARE "count" "less_than" remembered "before_count"',
