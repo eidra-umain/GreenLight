@@ -390,11 +390,12 @@ async function executeHeuristicStep(
 			}
 
 			default: {
-				// navigate, press, wait, assert → delegate to regular executor
+				// navigate, press, wait, assert, upload → delegate to regular executor
 				const action: Action = {
 					action: step.action,
 					value: step.value,
 					assertion: step.assertion,
+					...(step.testid !== undefined ? { testid: step.testid } : {}),
 				}
 				// Compare asserts: override the assertion type so the executor
 				// performs a live numeric comparison instead of an exact text match.

@@ -109,8 +109,16 @@ Example:
 - clear: Clear a field, filter, selection, or tag input. Requires "ref" or "text" to identify the element.
   Works for text inputs (select-all + delete), filter chips with clear/remove buttons, dropdowns with reset buttons,
   and multi-select tag inputs.
-  The runtime automatically detects the element type and finds the appropriate clear mechanism. 
+  The runtime automatically detects the element type and finds the appropriate clear mechanism.
   Use this for any step that says "clear", "reset", or "remove" a field or filter.
+- upload: Upload file(s) to a file input. Requires "value" (path to the file on disk) and one of:
+  - "testid" (data-testid attribute value) — use this when the step mentions a data-testid. This is
+    the most reliable way to target hidden file inputs. Example: upload testid="og-file-input" value="..."
+  - "ref" or "text" to identify the file input or the visible button that triggers it.
+  For multiple files, separate paths with a comma.
+  The runtime automatically finds the associated hidden file input if the targeted element is a
+  trigger button rather than the input itself (common pattern: styled button + hidden input).
+  Use this whenever the step says "upload", "attach", or "select a file".
 - For date/time inputs: when the step uses relative time expressions like "now plus 1 hour", "tomorrow", or "next week",
   compute the actual date/time value from the current time provided in the page state. 
   Format dates as the input expects (check the placeholder or input type — common formats: 
@@ -190,6 +198,9 @@ navigate value="/products"
 press value="Enter"
 clear ref=e19
 clear text="Välj tjänst"
+upload testid="og-file-input" value="fixtures/og_image.png"
+upload ref=e6 value="/path/to/receipt.pdf"
+upload text="Invoice" value="/path/to/a.pdf,/path/to/b.pdf"
 scroll value="down"
 scroll value="top"
 scroll ref=e15
@@ -252,6 +263,7 @@ When one input step produces multiple output lines, all of them get the same pre
 - scroll "up|down|top|bottom" — scroll the page in a direction, or to the top/bottom.
 - PAGE "scroll to ..." — scroll a specific element into view. Needs the live page to identify the element.
 - PAGE "clear ..." — clear a field, filter, selection, or tag input. Needs the live page to identify the element and its clear mechanism. Use for steps that say "clear", "reset", or "remove" a field, filter, or selection.
+- PAGE "upload ..." — upload a file to a file input. Needs the live page to identify the file input element. Use for steps that say "upload", "attach", or "select a file".
 
 ═══ Splitting steps ═══
 
@@ -350,6 +362,8 @@ Examples:
   "check that the price decreased" → COMPARE "the total price shown" "less_than" remembered "total_price"
   "remember the name of the booking" → REMEMBER "the booking name" as "booking_name"
   "check that the booking we just created is visible" → ASSERT_REMEMBERED "booking_name"
+  "upload the invoice PDF" → PAGE "upload the invoice PDF"
+  "attach receipt.pdf to the expense form" → PAGE "attach receipt.pdf to the expense form"
 `
 
 // ─────────────────────────────────────────────────────────────────────

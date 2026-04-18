@@ -79,6 +79,10 @@ export function createPlanRecorder(
 				hStep.value = action.value
 			}
 
+			if (action.testid !== undefined) {
+				hStep.testid = action.testid
+			}
+
 			if (action.option !== undefined) {
 				hStep.option = action.option
 			}

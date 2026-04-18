@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { describe, it, expect } from "vitest"
+import { fileURLToPath } from "url"
 import type { Page } from "playwright"
 import {
 	launchBrowser,
@@ -291,5 +292,44 @@ describe("executeAction with real browser", () => {
 			const result = await executeAction(page, action, tree)
 			expect(result.success).toBe(true)
 		})
+	})
+
+	it("executes an upload action", async () => {
+		const fixturePath = fileURLToPath(
+			new URL("../fixtures/upload/sample.txt", import.meta.url),
+		)
+		const browser = await launchBrowser({
+			headed: false,
+			viewport: DEFAULTS.viewport,
+		})
+		const context = await createContext(browser, {
+			headed: false,
+			viewport: DEFAULTS.viewport,
+		})
+		const page = await createPage(context)
+		await page.setContent(`
+			<html><body>
+				<input type="file" aria-label="Upload document" id="file-input" />
+				<div id="out"></div>
+				<script>
+					document.getElementById('file-input').addEventListener('change', function() {
+						document.getElementById('out').textContent = this.files[0]?.name ?? ''
+					})
+				</script>
+			</body></html>
+		`)
+		const uploadTree: A11yNode[] = [
+			{ ref: "e1", role: "button", name: "Upload document", raw: '- button "Upload document"' },
+		]
+		const action: Action = { action: "upload", ref: "e1", value: fixturePath }
+		try {
+			const result = await executeAction(page, action, uploadTree)
+			expect(result.success).toBe(true)
+			const fileName = await page.locator("#out").textContent()
+			expect(fileName).toBe("sample.txt")
+		} finally {
+			await context.close()
+			await closeBrowser(browser)
+		}
 	})
 })

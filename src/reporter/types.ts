@@ -174,6 +174,8 @@ export interface Action {
 	ref?: string
 	/** Visible text to target when the element is not in the a11y tree. */
 	text?: string
+	/** data-testid attribute value to target an element directly (bypasses a11y tree). */
+	testid?: string
 	/** Value to type, URL to navigate to, option to select, etc. */
 	value?: string
 	/** For autocomplete actions: the specific suggestion to select (defaults to first if omitted). */

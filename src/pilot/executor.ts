@@ -219,6 +219,69 @@ export async function executeAction(
 				break
 			}
 
+			case "upload": {
+				if (action.value == null) {
+					throw new Error("upload action requires a file path value")
+				}
+				const filePaths = action.value.includes(",")
+					? action.value.split(",").map((p) => p.trim())
+					: action.value
+
+				// Resolve the initial target — may be a visible trigger button
+				// rather than the file input itself (common UI pattern).
+				let fileInput: Locator
+				if (action.testid) {
+					// Direct testid targeting bypasses the a11y tree entirely,
+					// needed for hidden file inputs with a known data-testid.
+					fileInput = page.getByTestId(action.testid)
+				} else
+				try {
+					const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
+					resolvedSelector = await extractSelectorInfo(
+						page,
+						action,
+						a11yTree,
+						locator,
+					)
+					const inputType = await locator
+						.evaluate((el) => (el as HTMLInputElement).type?.toLowerCase())
+						.catch(() => "")
+
+					if (inputType === "file") {
+						fileInput = locator
+					} else {
+						// The LLM targeted the visible trigger button. Search the
+						// parent container for a sibling hidden file input first,
+						// then fall back to any file input on the page.
+						if (globals.debug) {
+							console.log(`      [upload] Resolved element is not a file input — searching nearby`)
+						}
+						const nearbyInput = locator.locator("..").locator("input[type='file']")
+						const nearbyCount = await nearbyInput.count().catch(() => 0)
+						if (nearbyCount > 0) {
+							fileInput = nearbyInput.first()
+						} else {
+							const pageInput = page.locator("input[type='file']")
+							if (await pageInput.count().catch(() => 0) === 0) {
+								throw new Error("upload: could not find a file input on the page")
+							}
+							fileInput = pageInput.first()
+							if (globals.debug) {
+								console.log(`      [upload] Using global file input fallback`)
+							}
+						}
+					}
+				} catch (err) {
+					// resolveActionTarget failed — try a global file input fallback.
+					const pageInput = page.locator("input[type='file']")
+					if (await pageInput.count().catch(() => 0) === 0) throw err
+					fileInput = pageInput.first()
+				}
+
+				await fileInput.setInputFiles(filePaths)
+				break
+			}
+
 			case "clear": {
 				const locator = await resolveActionTarget(page, action, a11yTree, stepHint)
 				resolvedSelector = await extractSelectorInfo(
