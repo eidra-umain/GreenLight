@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.1] - 2026-04-18
+
+Improved LLM response parsing reliability.
+
+### Fixed
+
+- **Response parser** -- base plan responses now filter to only numbered `#N` lines, stripping LLM fluff text that could cause incorrect step parsing. Expanded plan responses are parsed separately using a dedicated path.
+
 ## [0.8.0] - 2026-04-15
 
 Claude Code as LLM provider.
